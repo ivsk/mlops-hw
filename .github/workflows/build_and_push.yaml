@@ -88,7 +88,6 @@ jobs:
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
-        echo $ECR_REGISTRY
         echo ${{ env.TRAINING_ECR_REPOSITORY }}
         aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
         # Build training image
