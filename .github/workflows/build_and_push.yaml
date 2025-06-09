@@ -30,7 +30,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TRAINING_ECR_REPOSITORY: public.ecr.aws/z7k4k3d4/bert/training
+  TRAINING_ECR_REPOSITORY: bert/training
 
 
 jobs:
