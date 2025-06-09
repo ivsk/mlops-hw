@@ -10,15 +10,6 @@ on:
       - 'inference.py'
       - 'train'
       - 'serve'
-  pull_request:
-    branches: [ main ]
-    paths:
-      - 'Dockerfile*'
-      - 'requirements.txt'
-      - 'train.py'
-      - 'inference.py'
-      - 'train'
-      - 'serve'
   workflow_dispatch:
     inputs:
       build_training:
@@ -39,8 +30,7 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TRAINING_ECR_REPOSITORY: bert-genre-classifier-training
-  INFERENCE_ECR_REPOSITORY: bert-genre-classifier-inference
+  TRAINING_ECR_REPOSITORY: bert/training
 
 jobs:
   build-training-image:
@@ -98,9 +88,7 @@ jobs:
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
-        aws ecr describe-repositories --repository-names $TRAINING_ECR_REPOSITORY || \
-        aws ecr create-repository --repository-name $TRAINING_ECR_REPOSITORY
-        
+        aws ecr describe-repositories --repository-names $TRAINING_ECR_REPOSITORY        
         # Build training image
         echo "🔨 Building training image..."
         docker build -f Dockerfile -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
