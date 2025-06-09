@@ -84,9 +84,12 @@ jobs:
       id: build-training
       if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
       env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
+        echo $ECR_REGISTRY
+        echo $TRAINING_ECR_REPOSITORY
         aws ecr describe-repositories --repository-names $TRAINING_ECR_REPOSITORY        
         # Build training image
         echo "🔨 Building training image..."
