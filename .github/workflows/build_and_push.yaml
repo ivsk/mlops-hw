@@ -30,7 +30,6 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TRAINING_ECR_REPOSITORY: bert/training
 
 jobs:
   build-training-image:
@@ -84,7 +83,6 @@ jobs:
       id: build-training
       if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
       env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
