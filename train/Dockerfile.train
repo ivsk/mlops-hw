@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r /opt/program/requirements.txt
 COPY train/train.py /opt/program/train.py
 
 # Make the training script executable
-RUN chmod +x /opt/program/train
+RUN chmod +x /opt/program/train.py
 
 # Set the working directory
 WORKDIR /opt/program
