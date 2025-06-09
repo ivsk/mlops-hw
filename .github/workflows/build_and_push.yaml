@@ -93,7 +93,7 @@ jobs:
         aws ecr-public describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
         # Build training image
         echo "🔨 Building training image..."
-        docker build -f Dockerfile -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -f train/Dockerfile.train -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
         
         # Tag for ECR
         docker tag ${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG
