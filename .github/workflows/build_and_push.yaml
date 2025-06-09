@@ -73,8 +73,7 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
-        aws ecr describe-repositories
-        if aws ecr describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+        if aws ecr-public describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Training image with tag $IMAGE_TAG already exists"
         else
@@ -159,7 +158,7 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
-        if aws ecr describe-images --repository-name $INFERENCE_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+        if aws ecr-public describe-images --repository-name $INFERENCE_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Inference image with tag $IMAGE_TAG already exists"
         else
@@ -175,8 +174,8 @@ jobs:
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
-        aws ecr describe-repositories --repository-names $INFERENCE_ECR_REPOSITORY || \
-        aws ecr create-repository --repository-name $INFERENCE_ECR_REPOSITORY
+        aws ecr-public describe-repositories --repository-names $INFERENCE_ECR_REPOSITORY || \
+        aws ecr-public create-repository --repository-name $INFERENCE_ECR_REPOSITORY
         
         # Build inference image
         echo "🔨 Building inference image..."
