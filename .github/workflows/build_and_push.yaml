@@ -71,6 +71,7 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
+        echo aws ecr describe-images --repository-name $TRAINING_ECR_REPOSITORY
         if aws ecr describe-images --repository-name $TRAINING_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Training image with tag $IMAGE_TAG already exists"
