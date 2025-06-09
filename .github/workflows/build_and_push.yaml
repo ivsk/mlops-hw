@@ -90,7 +90,7 @@ jobs:
       run: |
         # Create ECR repository if it doesn't exist
         echo ${{ env.TRAINING_ECR_REPOSITORY }}
-        aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
+        aws ecr-public describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
         # Build training image
         echo "🔨 Building training image..."
         docker build -f Dockerfile -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
