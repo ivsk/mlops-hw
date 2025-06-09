@@ -13,14 +13,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set up the program directory
-COPY requirements.txt /opt/program/requirements.txt
+COPY train/requirements.txt /opt/program/requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r /opt/program/requirements.txt
 
 # Copy the training script
-COPY train /opt/program/train
-COPY train.py /opt/program/train.py
+COPY train/train.py /opt/program/train.py
 
 # Make the training script executable
 RUN chmod +x /opt/program/train
