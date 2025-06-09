@@ -72,7 +72,7 @@ jobs:
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         aws ecr describe-repositories
-        if aws ecr describe-images --repository-name $TRAINING_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+        if aws ecr describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Training image with tag $IMAGE_TAG already exists"
         else
@@ -89,22 +89,22 @@ jobs:
       run: |
         # Create ECR repository if it doesn't exist
         echo $ECR_REGISTRY
-        echo $TRAINING_ECR_REPOSITORY
-        aws ecr describe-repositories --repository-names $TRAINING_ECR_REPOSITORY        
+        echo ${{ env.TRAINING_ECR_REPOSITORY }}
+        aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
         # Build training image
         echo "🔨 Building training image..."
         docker build -f Dockerfile -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
         
         # Tag for ECR
-        docker tag $TRAINING_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
-        docker tag $TRAINING_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+        docker tag ${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG
+        docker tag ${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG $ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:latest
         
         # Push to ECR
         echo "📤 Pushing training image..."
-        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG
+        docker push $ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:latest
         
-        IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+        IMAGE_URI="$ECR_REGISTRY/${{ env.TRAINING_ECR_REPOSITORY }}:$IMAGE_TAG"
         echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
         echo "✅ Training image built and pushed: $IMAGE_URI"
         
