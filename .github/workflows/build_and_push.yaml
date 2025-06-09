@@ -1,0 +1,248 @@
+name: Build Docker Images
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile*'
+      - 'requirements.txt'
+      - 'train.py'
+      - 'inference.py'
+      - 'train'
+      - 'serve'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'Dockerfile*'
+      - 'requirements.txt'
+      - 'train.py'
+      - 'inference.py'
+      - 'train'
+      - 'serve'
+  workflow_dispatch:
+    inputs:
+      build_training:
+        description: 'Build training image'
+        required: false
+        default: true
+        type: boolean
+      build_inference:
+        description: 'Build inference image'
+        required: false
+        default: true
+        type: boolean
+      force_rebuild:
+        description: 'Force rebuild (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  TRAINING_ECR_REPOSITORY: bert-genre-classifier-training
+  INFERENCE_ECR_REPOSITORY: bert-genre-classifier-inference
+
+jobs:
+  build-training-image:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.build_training != 'false' }}
+    outputs:
+      training_image_uri: ${{ steps.build-training.outputs.image_uri }}
+      training_image_tag: ${{ steps.get-tag.outputs.tag }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Get image tag
+      id: get-tag
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          TAG="pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
+        else
+          TAG="$(git rev-parse --short HEAD)"
+        fi
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Using tag: $TAG"
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Check if training image exists
+      id: check-training-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        if aws ecr describe-images --repository-name $TRAINING_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Training image with tag $IMAGE_TAG already exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Training image with tag $IMAGE_TAG does not exist"
+        fi
+        
+    - name: Build and push training image
+      id: build-training
+      if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        # Create ECR repository if it doesn't exist
+        aws ecr describe-repositories --repository-names $TRAINING_ECR_REPOSITORY || \
+        aws ecr create-repository --repository-name $TRAINING_ECR_REPOSITORY
+        
+        # Build training image
+        echo "🔨 Building training image..."
+        docker build -f Dockerfile -t $TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
+        
+        # Tag for ECR
+        docker tag $TRAINING_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $TRAINING_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+        
+        # Push to ECR
+        echo "📤 Pushing training image..."
+        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+        
+        IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "✅ Training image built and pushed: $IMAGE_URI"
+        
+    - name: Use existing training image
+      id: use-existing-training
+      if: ${{ steps.check-training-image.outputs.exists == 'true' && github.event.inputs.force_rebuild != 'true' }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "♻️ Using existing training image: $IMAGE_URI"
+
+  build-inference-image:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.build_inference != 'false' }}
+    outputs:
+      inference_image_uri: ${{ steps.build-inference.outputs.image_uri }}
+      inference_image_tag: ${{ steps.get-tag.outputs.tag }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Get image tag
+      id: get-tag
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          TAG="pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
+        else
+          TAG="$(git rev-parse --short HEAD)"
+        fi
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Using tag: $TAG"
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Check if inference image exists
+      id: check-inference-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        if aws ecr describe-images --repository-name $INFERENCE_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Inference image with tag $IMAGE_TAG already exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Inference image with tag $IMAGE_TAG does not exist"
+        fi
+        
+    - name: Build and push inference image
+      id: build-inference
+      if: ${{ steps.check-inference-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        # Create ECR repository if it doesn't exist
+        aws ecr describe-repositories --repository-names $INFERENCE_ECR_REPOSITORY || \
+        aws ecr create-repository --repository-name $INFERENCE_ECR_REPOSITORY
+        
+        # Build inference image
+        echo "🔨 Building inference image..."
+        docker build -f Dockerfile.inference -t $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG .
+        
+        # Tag for ECR
+        docker tag $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
+        
+        # Push to ECR
+        echo "📤 Pushing inference image..."
+        docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
+        
+        IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "✅ Inference image built and pushed: $IMAGE_URI"
+        
+    - name: Use existing inference image
+      id: use-existing-inference
+      if: ${{ steps.check-inference-image.outputs.exists == 'true' && github.event.inputs.force_rebuild != 'true' }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "♻️ Using existing inference image: $IMAGE_URI"
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [build-training-image, build-inference-image]
+    if: always()
+    
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## 🔨 Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.build-training-image.result }}" == "success" ]; then
+          echo "✅ **Training Image**: Built successfully" >> $GITHUB_STEP_SUMMARY
+          echo "   - URI: ${{ needs.build-training-image.outputs.training_image_uri }}" >> $GITHUB_STEP_SUMMARY
+          echo "   - Tag: ${{ needs.build-training-image.outputs.training_image_tag }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Training Image**: Build failed or skipped" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.build-inference-image.result }}" == "success" ]; then
+          echo "✅ **Inference Image**: Built successfully" >> $GITHUB_STEP_SUMMARY
+          echo "   - URI: ${{ needs.build-inference-image.outputs.inference_image_uri }}" >> $GITHUB_STEP_SUMMARY
+          echo "   - Tag: ${{ needs.build-inference-image.outputs.inference_image_tag }}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Inference Image**: Build failed or skipped" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "🚀 **Next Steps**: Use these images in training or deployment workflows" >> $GITHUB_STEP_SUMMARY
