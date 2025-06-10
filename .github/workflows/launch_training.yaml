@@ -66,8 +66,7 @@ jobs:
       run: |
         # Create ECR repository if it doesn't exist
         aws ecr-public describe-repositories --repository-names $ECR_REPOSITORY
-        echo "image_uri=$ECR_REGISTRY/$REGISTRY_ALIAS/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
-        echo $GITHUB_ENV
+        echo "IMAGE_URI=$ECR_REGISTRY/$REGISTRY_ALIAS/$ECR_REPOSITORY:5d8f0a4" >> $GITHUB_ENV
         
     - name: Set up Python
       uses: actions/setup-python@v4
