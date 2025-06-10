@@ -85,7 +85,7 @@ def main():
         "max_run": 3600 * 6,  # 6 hours max
         "tags": tags,
         "enable_sagemaker_metrics": True,
-        "image_config": {"TrainingRepositoryAccessMode": "Vpc"},
+        "image_config": {"TrainingRepositoryAccessMode": "Platform"},
     }
 
     # Add spot instance configuration if requested
