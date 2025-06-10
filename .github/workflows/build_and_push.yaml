@@ -32,7 +32,6 @@ env:
   AWS_REGION: us-east-1
   TRAINING_ECR_REPOSITORY: bert/training
 
-
 jobs:
   build-training-image:
     runs-on: ubuntu-latest
@@ -66,8 +65,6 @@ jobs:
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
-      with:
-        registry-type: public
       
     - name: Check if training image exists
       id: check-training-image
@@ -75,7 +72,7 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
-        if aws ecr-public describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+        if aws ecr describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Training image with tag $IMAGE_TAG already exists"
         else
@@ -88,21 +85,20 @@ jobs:
       if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        REGISTRY_ALIAS: z7k4k3d4
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
         # Create ECR repository if it doesn't exist
-        aws ecr-public describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
+        aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
         # Build training image
         echo "🔨 Building training image..."
-        docker build -f train/Dockerfile.train -t $ECR_REGISTRY/$REGISTRY_ALIAS/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -f train/Dockerfile.train -t $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
         
         
         # Push to ECR
         echo "📤 Pushing training image..."
-        docker push $ECR_REGISTRY/$REGISTRY_ALIAS/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
         
-        IMAGE_URI="$ECR_REGISTRY/$REGISTRY_ALIAS/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+        IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
         echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
         echo "✅ Training image built and pushed: $IMAGE_URI"
         
@@ -145,7 +141,7 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
-        if aws ecr-public describe-images --repository-name $INFERENCE_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+        if aws ecr describe-images --repository-name $INFERENCE_ECR_REPOSITORY --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
           echo "exists=true" >> $GITHUB_OUTPUT
           echo "Inference image with tag $IMAGE_TAG already exists"
         else
