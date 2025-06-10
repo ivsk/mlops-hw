@@ -27,7 +27,7 @@ def main():
     s3_bucket = os.environ["S3_BUCKET"]
     aws_region = os.environ["AWS_REGION"]
     instance_type = os.environ.get("INSTANCE_TYPE", "ml.m5.large")
-    epochs = int(os.environ.get("EPOCHS", "0.00001"))
+    epochs = float(os.environ.get("EPOCHS", "0.00001"))
     use_spot = os.environ.get("USE_SPOT", "true").lower() == "true"
 
     # GitHub context
