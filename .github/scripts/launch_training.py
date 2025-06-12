@@ -45,7 +45,9 @@ def main():
     print(f"   Commit: {github_sha}")
 
     # Initialize SageMaker session
-    sagemaker_session = sagemaker.Session()
+    sagemaker_session = sagemaker.Session(
+        boto3.session.Session(region_name="us-east-1")
+    )
 
     # Training data paths
     input_path = "train_data.txt"
@@ -56,8 +58,8 @@ def main():
         "model-name": "bert-base-uncased",
         "max-length": 256,
         "num-train-epochs": epochs,
-        "per-device-train-batch-size": 16 if "p3" in instance_type else 8,
-        "per-device-eval-batch-size": 16 if "p3" in instance_type else 8,
+        "per-device-train-batch-size": 16 if "p3" in instance_type else 2,
+        "per-device-eval-batch-size": 16 if "p3" in instance_type else 2,
         "learning-rate": 2e-5,
         "weight-decay": 0.01,
         "warmup-steps": 100,

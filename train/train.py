@@ -17,6 +17,11 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+# MLflow imports
+import mlflow
+import mlflow.pytorch
+from mlflow.tracking import MlflowClient
+
 # SageMaker specific paths
 INPUT_PATH = "/opt/ml/input/data"
 OUTPUT_PATH = "/opt/ml/output"
@@ -43,18 +48,37 @@ def parse_args():
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--warmup-steps", type=int, default=500)
 
-    # Model Registry arguments
+    # MLflow specific arguments
     parser.add_argument(
-        "--model-package-group-name", type=str, default="bert-genre-classifier"
+        "--mlflow-experiment-name", type=str, default="bert-genre-classifier"
     )
-    parser.add_argument(
-        "--model-approval-status",
-        type=str,
-        default="PendingManualApproval",
-        choices=["Approved", "Rejected", "PendingManualApproval"],
-    )
+    parser.add_argument("--github-actor", type=str, default="unknown")
+    parser.add_argument("--github-repo", type=str, default="unknown")
+    parser.add_argument("--github-sha", type=str, default="unknown")
+    parser.add_argument("--github-ref", type=str, default="unknown")
 
     return parser.parse_args()
+
+
+def setup_mlflow(args):
+    """Setup MLflow tracking"""
+    try:
+        # Set MLflow tracking URI to SageMaker
+        mlflow.set_tracking_uri("sagemaker://")
+
+        # Set experiment
+        mlflow.set_experiment(args.mlflow_experiment_name)
+
+        print(f"✅ MLflow setup complete")
+        print(f"   Tracking URI: {mlflow.get_tracking_uri()}")
+        print(f"   Experiment: {args.mlflow_experiment_name}")
+
+        return True
+
+    except Exception as e:
+        print(f"⚠️ Warning: MLflow setup failed: {e}")
+        print("   Continuing without MLflow tracking...")
+        return False
 
 
 def load_data(file_path, is_train=True):
@@ -114,227 +138,84 @@ def compute_metrics(pred):
     return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
 
 
-def create_model_package_group(sagemaker_client, group_name, description):
-    """Create model package group if it doesn't exist"""
-    try:
-        sagemaker_client.describe_model_package_group(ModelPackageGroupName=group_name)
-        print(f"✅ Model package group '{group_name}' already exists")
-        return True
-    except sagemaker_client.exceptions.ClientError as e:
-        if "does not exist" in str(e).lower():
-            try:
-                # Add tags to the model package group instead of individual packages
-                sagemaker_client.create_model_package_group(
-                    ModelPackageGroupName=group_name,
-                    ModelPackageGroupDescription=description,
-                    Tags=[
-                        {"Key": "Project", "Value": "bert-genre-classifier"},
-                        {"Key": "Framework", "Value": "PyTorch"},
-                        {"Key": "ModelType", "Value": "TextClassification"},
-                        {"Key": "CreatedBy", "Value": "SageMakerTraining"},
-                        {"Key": "Timestamp", "Value": datetime.utcnow().isoformat()},
-                    ],
-                )
-                print(f"✅ Created model package group '{group_name}' with tags")
-                return True
-            except Exception as create_error:
-                print(f"❌ Error creating model package group: {create_error}")
-                return False
-        else:
-            print(f"❌ Error checking model package group: {e}")
-            return False
+class MLflowCallback:
+    """Custom callback for MLflow logging during training"""
+
+    def __init__(self, mlflow_enabled=True):
+        self.mlflow_enabled = mlflow_enabled
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when training logs are generated"""
+        if not self.mlflow_enabled or logs is None:
+            return
+
+        try:
+            # Log training metrics
+            step = state.global_step
+            for key, value in logs.items():
+                if isinstance(value, (int, float)):
+                    mlflow.log_metric(key, value, step=step)
+        except Exception as e:
+            print(f"⚠️ Warning: MLflow logging failed: {e}")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        """Called at the end of training"""
+        if not self.mlflow_enabled:
+            return
+
+        try:
+            # Log final training state
+            mlflow.log_metric("final_global_step", state.global_step)
+            mlflow.log_metric("final_epoch", state.epoch)
+            print("✅ Training metrics logged to MLflow")
+        except Exception as e:
+            print(f"⚠️ Warning: Final MLflow logging failed: {e}")
 
 
-def register_model_version(
-    args, model_artifacts_url, evaluation_results, training_metadata
+def log_model_to_mlflow(
+    model, tokenizer, args, eval_results, training_metadata, mlflow_enabled
 ):
-    """Register model version in SageMaker Model Registry"""
-
-    print("\n🔄 Registering model in SageMaker Model Registry...")
-
-    # Get training job name from environment (set by SageMaker)
-    training_job_name = os.environ.get("SM_TRAINING_JOB_NAME", "unknown-job")
-
-    try:
-        sagemaker_client = boto3.client("sagemaker")
-
-        # Create model package group if it doesn't exist
-        group_created = create_model_package_group(
-            sagemaker_client,
-            args.model_package_group_name,
-            "BERT Genre Classifier model versions",
-        )
-
-        if not group_created:
-            print(
-                "❌ Failed to create/verify model package group. Skipping model registration."
-            )
-            return None
-
-        # Prepare model metrics for registry
-        model_metrics = {
-            "ModelQuality": {
-                "Statistics": {
-                    "ContentType": "application/json",
-                    "S3Uri": f"{model_artifacts_url.replace('/model.tar.gz', '')}/evaluation_results.json",
-                }
-            }
-        }
-
-        # Save evaluation results to S3 for model metrics
-        save_evaluation_to_s3(
-            evaluation_results, training_metadata, model_artifacts_url
-        )
-
-        # Prepare inference specification
-        inference_specification = {
-            "Containers": [
-                {
-                    "Image": "763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-inference:1.13.1-transformers4.26.0-gpu-py39-cu117-ubuntu20.04-sagemaker",
-                    "ModelDataUrl": model_artifacts_url,
-                    "Environment": {
-                        "SAGEMAKER_PROGRAM": "inference.py",
-                        "SAGEMAKER_SUBMIT_DIRECTORY": "/opt/ml/code",
-                        "MODEL_NAME": args.model_name,
-                        "MAX_LENGTH": str(args.max_length),
-                    },
-                }
-            ],
-            "SupportedContentTypes": ["application/json", "text/csv"],
-            "SupportedResponseMIMETypes": ["application/json"],
-            "SupportedRealtimeInferenceInstanceTypes": [
-                "ml.t2.medium",
-                "ml.m5.large",
-                "ml.m5.xlarge",
-                "ml.c5.large",
-                "ml.c5.xlarge",
-            ],
-            "SupportedTransformInstanceTypes": ["ml.m5.large", "ml.m5.xlarge"],
-        }
-
-        # Create model package (remove Tags from here)
-        model_package_input = {
-            "ModelPackageGroupName": args.model_package_group_name,
-            "ModelPackageDescription": f"BERT Genre Classifier trained on {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}",
-            "ModelApprovalStatus": args.model_approval_status,
-            "InferenceSpecification": inference_specification,
-            "ModelMetrics": model_metrics,
-            "CustomerMetadataProperties": {
-                "TrainingJobName": training_job_name,
-                "ModelName": args.model_name,
-                "Epochs": str(args.num_train_epochs),
-                "BatchSize": str(args.per_device_train_batch_size),
-                "LearningRate": str(args.learning_rate),
-                "WeightDecay": str(args.weight_decay),
-                "WarmupSteps": str(args.warmup_steps),
-                "MaxLength": str(args.max_length),
-                "Accuracy": f"{evaluation_results.get('eval_accuracy', 0):.4f}",
-                "F1Score": f"{evaluation_results.get('eval_f1', 0):.4f}",
-                "Precision": f"{evaluation_results.get('eval_precision', 0):.4f}",
-                "Recall": f"{evaluation_results.get('eval_recall', 0):.4f}",
-                "TrainingLoss": f"{evaluation_results.get('train_loss', 0):.4f}",
-                "ValidationLoss": f"{evaluation_results.get('eval_loss', 0):.4f}",
-                "Framework": "PyTorch",
-                "FrameworkVersion": torch.__version__,
-                "TransformersVersion": "4.26.0",
-            },
-            # Tags removed - they belong on the Model Package Group, not individual packages
-        }
-
-        # Register the model
-        response = sagemaker_client.create_model_package(**model_package_input)
-        model_package_arn = response["ModelPackageArn"]
-
-        print(f"✅ Model registered successfully!")
-        print(f"   Model Package ARN: {model_package_arn}")
-        print(f"   Model Package Group: {args.model_package_group_name}")
-        print(f"   Approval Status: {args.model_approval_status}")
-
-        # Save registration info
-        registration_info = {
-            "model_package_arn": model_package_arn,
-            "model_package_group_name": args.model_package_group_name,
-            "model_approval_status": args.model_approval_status,
-            "training_job_name": training_job_name,
-            "registration_timestamp": datetime.utcnow().isoformat(),
-            "model_metrics": evaluation_results,
-            "hyperparameters": {
-                "model_name": args.model_name,
-                "num_train_epochs": args.num_train_epochs,
-                "per_device_train_batch_size": args.per_device_train_batch_size,
-                "learning_rate": args.learning_rate,
-                "weight_decay": args.weight_decay,
-                "warmup_steps": args.warmup_steps,
-                "max_length": args.max_length,
-            },
-        }
-
-        # Save to model directory
-        registration_path = os.path.join(args.model_dir, "model_registry_info.json")
-        with open(registration_path, "w") as f:
-            json.dump(registration_info, f, indent=2)
-
-        print(f"📝 Registration info saved to {registration_path}")
-
-        return model_package_arn
-
-    except Exception as e:
-        print(f"❌ Error registering model: {str(e)}")
-        print("⚠️ Model training completed but registration failed")
+    """Log model and artifacts to MLflow"""
+    if not mlflow_enabled:
         return None
 
-
-def save_evaluation_to_s3(evaluation_results, training_metadata, model_artifacts_url):
-    """Save evaluation results to S3 for model registry metrics"""
     try:
-        s3_client = boto3.client("s3")
+        # Create a temporary directory for model artifacts
+        import tempfile
 
-        # Parse S3 URL
-        s3_parts = model_artifacts_url.replace("s3://", "").split("/")
-        bucket = s3_parts[0]
-        key_prefix = "/".join(s3_parts[1:-1])  # Remove model.tar.gz
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save model and tokenizer
+            model_path = os.path.join(temp_dir, "model")
+            model.save_pretrained(model_path)
+            tokenizer.save_pretrained(model_path)
 
-        # Prepare comprehensive evaluation data
-        evaluation_data = {
-            "version": "1.0",
-            "model_name": "bert-genre-classifier",
-            "evaluation_timestamp": datetime.utcnow().isoformat(),
-            "metrics": {
-                "accuracy": float(evaluation_results.get("eval_accuracy", 0)),
-                "f1_score": float(evaluation_results.get("eval_f1", 0)),
-                "precision": float(evaluation_results.get("eval_precision", 0)),
-                "recall": float(evaluation_results.get("eval_recall", 0)),
-                "training_loss": float(evaluation_results.get("train_loss", 0)),
-                "validation_loss": float(evaluation_results.get("eval_loss", 0)),
-            },
-            "training_metadata": training_metadata,
-            "model_quality_metrics": [
-                {
-                    "name": "accuracy",
-                    "value": float(evaluation_results.get("eval_accuracy", 0)),
-                    "standard_deviation": 0.0,
-                },
-                {
-                    "name": "f1_score",
-                    "value": float(evaluation_results.get("eval_f1", 0)),
-                    "standard_deviation": 0.0,
-                },
-            ],
-        }
+            # Log model to MLflow
+            mlflow.pytorch.log_model(
+                pytorch_model=model,
+                artifact_path="model",
+                registered_model_name="bert-genre-classifier",
+                pip_requirements=[
+                    "torch",
+                    "transformers",
+                    "sklearn",
+                    "pandas",
+                    "numpy",
+                ],
+            )
 
-        # Upload to S3
-        evaluation_key = f"{key_prefix}/evaluation_results.json"
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=evaluation_key,
-            Body=json.dumps(evaluation_data, indent=2),
-            ContentType="application/json",
-        )
+            # Log model artifacts
+            mlflow.log_artifacts(model_path, "model_files")
 
-        print(f"📊 Evaluation results saved to s3://{bucket}/{evaluation_key}")
+            print("✅ Model logged to MLflow")
+
+            # Get the logged model URI
+            run_id = mlflow.active_run().info.run_id
+            model_uri = f"runs:/{run_id}/model"
+            return model_uri
 
     except Exception as e:
-        print(f"⚠️ Warning: Could not save evaluation results to S3: {e}")
+        print(f"⚠️ Warning: Model logging to MLflow failed: {e}")
+        return None
 
 
 def main():
@@ -344,202 +225,380 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    # Load training data
-    train_file = os.path.join(args.train, "train_data.txt")
+    # Setup MLflow
+    mlflow_enabled = setup_mlflow(args)
+
+    # Start MLflow run
+    run_id = None
+    if mlflow_enabled:
+        try:
+            # Get training job name from environment
+            training_job_name = os.environ.get("SM_TRAINING_JOB_NAME", "unknown-job")
+
+            # Start MLflow run with tags
+            mlflow.start_run(run_name=f"training-{training_job_name}")
+            run_id = mlflow.active_run().info.run_id
+
+            # Log Git and training context
+            mlflow.set_tags(
+                {
+                    "github.actor": args.github_actor,
+                    "github.repository": args.github_repo,
+                    "github.sha": args.github_sha,
+                    "github.ref": args.github_ref,
+                    "sagemaker.training_job_name": training_job_name,
+                    "model.framework": "pytorch",
+                    "model.type": "text_classification",
+                    "training.device": str(device),
+                }
+            )
+
+            print(f"✅ Started MLflow run: {run_id}")
+
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to start MLflow run: {e}")
+            mlflow_enabled = False
+
     try:
-        train_df_full = load_data(train_file, is_train=True)
-        print(f"Loaded {len(train_df_full)} training samples.")
-    except FileNotFoundError:
-        print(f"Error: {train_file} not found.")
-        return
+        # Load training data
+        train_file = os.path.join(args.train, "train_data.txt")
+        try:
+            train_df_full = load_data(train_file, is_train=True)
+            print(f"Loaded {len(train_df_full)} training samples.")
+        except FileNotFoundError:
+            print(f"Error: {train_file} not found.")
+            return
 
-    if train_df_full.empty:
-        print("Training data is empty. Exiting.")
-        return
+        if train_df_full.empty:
+            print("Training data is empty. Exiting.")
+            return
 
-    # Preprocessing
-    train_df_full["TEXT"] = (
-        train_df_full["TITLE"] + " [SEP] " + train_df_full["DESCRIPTION"]
-    )
-
-    # Create label mappings
-    unique_genres = sorted(list(train_df_full["GENRE"].unique()))
-    genre_to_id = {genre: i for i, genre in enumerate(unique_genres)}
-    id_to_genre = {i: genre for genre, i in genre_to_id.items()}
-    num_labels = len(unique_genres)
-
-    print(f"Genre to ID mapping: {genre_to_id}")
-    print(f"Number of unique genres: {num_labels}")
-
-    train_df_full["labels"] = train_df_full["GENRE"].map(genre_to_id)
-
-    # Split data
-    if len(train_df_full) > 1:
-        train_texts, val_texts, train_labels, val_labels = train_test_split(
-            train_df_full["TEXT"].tolist(),
-            train_df_full["labels"].tolist(),
-            test_size=0.15,
-            random_state=42,
-            stratify=train_df_full["labels"].tolist(),
+        # Preprocessing
+        train_df_full["TEXT"] = (
+            train_df_full["TITLE"] + " [SEP] " + train_df_full["DESCRIPTION"]
         )
-    else:
-        train_texts = train_df_full["TEXT"].tolist()
-        train_labels = train_df_full["labels"].tolist()
-        val_texts = train_texts
-        val_labels = train_labels
 
-    print(f"Training samples: {len(train_texts)}")
-    print(f"Validation samples: {len(val_texts)}")
+        # Create label mappings
+        unique_genres = sorted(list(train_df_full["GENRE"].unique()))
+        genre_to_id = {genre: i for i, genre in enumerate(unique_genres)}
+        id_to_genre = {i: genre for genre, i in genre_to_id.items()}
+        num_labels = len(unique_genres)
 
-    # Tokenization
-    tokenizer = BertTokenizerFast.from_pretrained(args.model_name)
+        print(f"Genre to ID mapping: {genre_to_id}")
+        print(f"Number of unique genres: {num_labels}")
 
-    train_encodings = tokenizer(
-        train_texts, truncation=True, padding=True, max_length=args.max_length
-    )
-    val_encodings = tokenizer(
-        val_texts, truncation=True, padding=True, max_length=args.max_length
-    )
+        train_df_full["labels"] = train_df_full["GENRE"].map(genre_to_id)
 
-    # Create datasets
-    train_dataset = GenreDataset(train_encodings, train_labels)
-    val_dataset = GenreDataset(val_encodings, val_labels)
+        # Log dataset information to MLflow
+        if mlflow_enabled:
+            try:
+                mlflow.log_params(
+                    {
+                        "dataset_size": len(train_df_full),
+                        "num_labels": num_labels,
+                        "unique_genres": list(unique_genres),
+                    }
+                )
+                mlflow.log_param("genres_mapping", json.dumps(genre_to_id))
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log dataset info to MLflow: {e}")
 
-    # Load model
-    model = BertForSequenceClassification.from_pretrained(
-        args.model_name,
-        num_labels=num_labels,
-        id2label=id_to_genre,
-        label2id=genre_to_id,
-    )
-    model.to(device)
+        # Split data
+        if len(train_df_full) > 1:
+            train_texts, val_texts, train_labels, val_labels = train_test_split(
+                train_df_full["TEXT"].tolist(),
+                train_df_full["labels"].tolist(),
+                test_size=0.15,
+                random_state=42,
+                stratify=train_df_full["labels"].tolist(),
+            )
+        else:
+            train_texts = train_df_full["TEXT"].tolist()
+            train_labels = train_df_full["labels"].tolist()
+            val_texts = train_texts
+            val_labels = train_labels
 
-    # Training arguments
-    training_args = TrainingArguments(
-        output_dir=args.model_dir,
-        num_train_epochs=args.num_train_epochs,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        learning_rate=args.learning_rate,
-        warmup_steps=args.warmup_steps,
-        weight_decay=args.weight_decay,
-        logging_dir=os.path.join(args.model_dir, "logs"),
-        logging_steps=10,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model="accuracy",
-        greater_is_better=True,
-        fp16=torch.cuda.is_available(),
-        save_total_limit=1,
-        report_to=None,  # Disable external reporting
-    )
+        print(f"Training samples: {len(train_texts)}")
+        print(f"Validation samples: {len(val_texts)}")
 
-    # Initialize trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-    )
+        # Log hyperparameters to MLflow
+        if mlflow_enabled:
+            try:
+                mlflow.log_params(
+                    {
+                        "model_name": args.model_name,
+                        "max_length": args.max_length,
+                        "num_train_epochs": args.num_train_epochs,
+                        "per_device_train_batch_size": args.per_device_train_batch_size,
+                        "per_device_eval_batch_size": args.per_device_eval_batch_size,
+                        "learning_rate": args.learning_rate,
+                        "weight_decay": args.weight_decay,
+                        "warmup_steps": args.warmup_steps,
+                        "training_samples": len(train_texts),
+                        "validation_samples": len(val_texts),
+                    }
+                )
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log hyperparameters to MLflow: {e}")
 
-    # Train
-    print("\n--- Starting Training ---")
-    training_result = trainer.train()
-    print("\n--- Training Finished ---")
+        # Tokenization
+        tokenizer = BertTokenizerFast.from_pretrained(args.model_name)
 
-    # Evaluate
-    print("\n--- Evaluating Best Model ---")
-    eval_results = trainer.evaluate(eval_dataset=val_dataset)
-    print("Validation Results:")
-    for key, value in eval_results.items():
-        print(f"  {key}: {value:.4f}")
+        train_encodings = tokenizer(
+            train_texts, truncation=True, padding=True, max_length=args.max_length
+        )
+        val_encodings = tokenizer(
+            val_texts, truncation=True, padding=True, max_length=args.max_length
+        )
 
-    # Save model and tokenizer
-    print(f"\nSaving model to {args.model_dir}")
-    trainer.save_model(args.model_dir)
+        # Create datasets
+        train_dataset = GenreDataset(train_encodings, train_labels)
+        val_dataset = GenreDataset(val_encodings, val_labels)
 
-    # Save label mappings
-    label_map_path = os.path.join(args.model_dir, "label_mappings.pth")
-    torch.save(
-        {
-            "genre_to_id": genre_to_id,
-            "id_to_genre": id_to_genre,
+        # Load model
+        model = BertForSequenceClassification.from_pretrained(
+            args.model_name,
+            num_labels=num_labels,
+            id2label=id_to_genre,
+            label2id=genre_to_id,
+        )
+        model.to(device)
+
+        # Log model architecture info to MLflow
+        if mlflow_enabled:
+            try:
+                total_params = sum(p.numel() for p in model.parameters())
+                trainable_params = sum(
+                    p.numel() for p in model.parameters() if p.requires_grad
+                )
+                mlflow.log_params(
+                    {
+                        "total_parameters": total_params,
+                        "trainable_parameters": trainable_params,
+                        "model_architecture": "BertForSequenceClassification",
+                    }
+                )
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log model info to MLflow: {e}")
+
+        # Training arguments
+        training_args = TrainingArguments(
+            output_dir=args.model_dir,
+            num_train_epochs=args.num_train_epochs,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            per_device_eval_batch_size=args.per_device_eval_batch_size,
+            learning_rate=args.learning_rate,
+            warmup_steps=args.warmup_steps,
+            weight_decay=args.weight_decay,
+            logging_dir=os.path.join(args.model_dir, "logs"),
+            logging_steps=10,
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            load_best_model_at_end=True,
+            metric_for_best_model="accuracy",
+            greater_is_better=True,
+            fp16=torch.cuda.is_available(),
+            save_total_limit=1,
+            report_to=None,  # Disable external reporting - we use custom MLflow callback
+        )
+
+        # Initialize trainer with MLflow callback
+        callbacks = []
+        if mlflow_enabled:
+            callbacks.append(MLflowCallback(mlflow_enabled))
+
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            tokenizer=tokenizer,
+            compute_metrics=compute_metrics,
+            callbacks=callbacks,
+        )
+
+        # Train
+        print("\n--- Starting Training ---")
+        training_result = trainer.train()
+        print("\n--- Training Finished ---")
+
+        # Evaluate
+        print("\n--- Evaluating Best Model ---")
+        eval_results = trainer.evaluate(eval_dataset=val_dataset)
+        print("Validation Results:")
+        for key, value in eval_results.items():
+            print(f"  {key}: {value:.4f}")
+
+        # Log final evaluation metrics to MLflow
+        if mlflow_enabled:
+            try:
+                for key, value in eval_results.items():
+                    if isinstance(value, (int, float)):
+                        mlflow.log_metric(f"final_{key}", value)
+
+                # Log training results
+                for key, value in training_result.metrics.items():
+                    if isinstance(value, (int, float)):
+                        mlflow.log_metric(f"training_{key}", value)
+
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log final metrics to MLflow: {e}")
+
+        # Save model and tokenizer
+        print(f"\nSaving model to {args.model_dir}")
+        trainer.save_model(args.model_dir)
+
+        # Save label mappings
+        label_map_path = os.path.join(args.model_dir, "label_mappings.pth")
+        torch.save(
+            {
+                "genre_to_id": genre_to_id,
+                "id_to_genre": id_to_genre,
+                "num_labels": num_labels,
+            },
+            label_map_path,
+        )
+        print(f"Label mappings saved to {label_map_path}")
+
+        # Prepare training metadata
+        training_metadata = {
+            "dataset_size": len(train_df_full),
+            "training_samples": len(train_texts),
+            "validation_samples": len(val_texts),
             "num_labels": num_labels,
-        },
-        label_map_path,
-    )
-    print(f"Label mappings saved to {label_map_path}")
+            "genres": list(unique_genres),
+            "device": str(device),
+            "model_parameters": sum(p.numel() for p in model.parameters()),
+            "trainable_parameters": sum(
+                p.numel() for p in model.parameters() if p.requires_grad
+            ),
+            "training_time_seconds": training_result.metrics.get("train_runtime", 0),
+            "total_training_steps": (
+                training_result.global_step
+                if hasattr(training_result, "global_step")
+                else 0
+            ),
+        }
 
-    # Prepare training metadata
-    training_metadata = {
-        "dataset_size": len(train_df_full),
-        "training_samples": len(train_texts),
-        "validation_samples": len(val_texts),
-        "num_labels": num_labels,
-        "genres": list(unique_genres),
-        "device": str(device),
-        "model_parameters": sum(p.numel() for p in model.parameters()),
-        "trainable_parameters": sum(
-            p.numel() for p in model.parameters() if p.requires_grad
-        ),
-        "training_time_seconds": training_result.metrics.get("train_runtime", 0),
-        "total_training_steps": (
-            training_result.global_step
-            if hasattr(training_result, "global_step")
-            else 0
-        ),
-    }
+        # Log model to MLflow
+        model_uri = log_model_to_mlflow(
+            model, tokenizer, args, eval_results, training_metadata, mlflow_enabled
+        )
 
-    # Combine training and evaluation results
-    all_results = {**eval_results, **training_result.metrics}
+        # Combine training and evaluation results
+        all_results = {**eval_results, **training_result.metrics}
 
-    # Determine model artifacts URL
-    training_job_name = os.environ.get("SM_TRAINING_JOB_NAME", "unknown-job")
-    output_s3_path = os.environ.get("SM_OUTPUT_DATA_DIR", "/opt/ml/output/data")
+        # Save comprehensive results
+        final_results = {
+            "training_completed": True,
+            "mlflow_run_id": run_id,
+            "mlflow_model_uri": model_uri,
+            "evaluation_results": eval_results,
+            "training_results": training_result.metrics,
+            "training_metadata": training_metadata,
+            "hyperparameters": {
+                "model_name": args.model_name,
+                "num_train_epochs": args.num_train_epochs,
+                "per_device_train_batch_size": args.per_device_train_batch_size,
+                "per_device_eval_batch_size": args.per_device_eval_batch_size,
+                "learning_rate": args.learning_rate,
+                "weight_decay": args.weight_decay,
+                "warmup_steps": args.warmup_steps,
+                "max_length": args.max_length,
+            },
+            "completion_timestamp": datetime.utcnow().isoformat(),
+        }
 
-    # Construct model artifacts URL (SageMaker automatically uploads to S3)
-    if "s3://" in output_s3_path:
-        model_artifacts_url = f"{output_s3_path.rstrip('/')}/model.tar.gz"
-    else:
-        # Fallback - construct based on typical SageMaker pattern
-        model_artifacts_url = f"s3://sagemaker-us-east-1-{boto3.client('sts').get_caller_identity()['Account']}/sagemaker-training-job-{training_job_name}/output/model.tar.gz"
+        # Log additional artifacts to MLflow
+        if mlflow_enabled:
+            try:
+                # Log label mappings as artifact
+                mlflow.log_artifact(label_map_path, "model_artifacts")
 
-    # Register model in SageMaker Model Registry
-    model_package_arn = register_model_version(
-        args, model_artifacts_url, all_results, training_metadata
-    )
+                # Create and log training summary
+                training_summary = {
+                    "model_performance": {
+                        "accuracy": float(eval_results.get("eval_accuracy", 0)),
+                        "f1_score": float(eval_results.get("eval_f1", 0)),
+                        "precision": float(eval_results.get("eval_precision", 0)),
+                        "recall": float(eval_results.get("eval_recall", 0)),
+                    },
+                    "training_info": training_metadata,
+                    "hyperparameters": final_results["hyperparameters"],
+                    "git_info": {
+                        "actor": args.github_actor,
+                        "repository": args.github_repo,
+                        "sha": args.github_sha,
+                        "ref": args.github_ref,
+                    },
+                }
 
-    # Save comprehensive results
-    final_results = {
-        "training_completed": True,
-        "model_artifacts_url": model_artifacts_url,
-        "model_package_arn": model_package_arn,
-        "evaluation_results": eval_results,
-        "training_results": training_result.metrics,
-        "training_metadata": training_metadata,
-        "hyperparameters": {
-            "model_name": args.model_name,
-            "num_train_epochs": args.num_train_epochs,
-            "per_device_train_batch_size": args.per_device_train_batch_size,
-            "per_device_eval_batch_size": args.per_device_eval_batch_size,
-            "learning_rate": args.learning_rate,
-            "weight_decay": args.weight_decay,
-            "warmup_steps": args.warmup_steps,
-            "max_length": args.max_length,
-        },
-        "completion_timestamp": datetime.utcnow().isoformat(),
-    }
+                # Save training summary locally and log to MLflow
+                summary_path = os.path.join(args.model_dir, "training_summary.json")
+                with open(summary_path, "w") as f:
+                    json.dump(training_summary, f, indent=2, default=str)
 
-    # Save final results
-    results_path = os.path.join(args.model_dir, "training_results.json")
-    with open(results_path, "w") as f:
-        json.dump(final_results, f, indent=2, default=str)
+                mlflow.log_artifact(summary_path, "training_info")
 
-    print(f"📋 Final results saved to {results_path}")
-    print("🎉 Training completed successfully with model registration!")
+                print("✅ Additional artifacts logged to MLflow")
+
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log additional artifacts to MLflow: {e}")
+
+        # Save final results
+        results_path = os.path.join(args.model_dir, "training_results.json")
+        with open(results_path, "w") as f:
+            json.dump(final_results, f, indent=2, default=str)
+
+        print(f"📋 Final results saved to {results_path}")
+        print("🎉 Training completed successfully with MLflow tracking!")
+
+        # Log final success status to MLflow
+        if mlflow_enabled:
+            try:
+                mlflow.log_metric("training_success", 1)
+                mlflow.set_tag("status", "completed")
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to log final status to MLflow: {e}")
+
+    except Exception as e:
+        print(f"❌ Error during training: {str(e)}")
+
+        # Log error to MLflow
+        if mlflow_enabled:
+            try:
+                mlflow.log_metric("training_success", 0)
+                mlflow.set_tag("status", "failed")
+                mlflow.set_tag("error", str(e))
+            except Exception as mlflow_error:
+                print(f"⚠️ Warning: Failed to log error to MLflow: {mlflow_error}")
+
+        # Save error information
+        os.makedirs(args.model_dir, exist_ok=True)
+        error_info = {
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+            "mlflow_run_id": run_id,
+            "github_context": {
+                "actor": args.github_actor,
+                "repository": args.github_repo,
+                "sha": args.github_sha,
+            },
+        }
+
+        with open(os.path.join(args.model_dir, "error.json"), "w") as f:
+            json.dump(error_info, f, indent=2)
+
+        raise
+
+    finally:
+        # End MLflow run
+        if mlflow_enabled and mlflow.active_run():
+            try:
+                mlflow.end_run()
+                print("✅ MLflow run ended successfully")
+            except Exception as e:
+                print(f"⚠️ Warning: Failed to end MLflow run: {e}")
 
 
 if __name__ == "__main__":
