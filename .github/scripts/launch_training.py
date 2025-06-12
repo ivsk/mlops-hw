@@ -24,7 +24,7 @@ def main():
     # Get environment variables
     image_uri = os.environ["IMAGE_URI"]
     sagemaker_role = os.environ["SAGEMAKER_ROLE"]
-    s3_bucket = os.environ["S3_BUCKET"]
+    # s3_bucket = os.environ["S3_BUCKET"]
     aws_region = os.environ["AWS_REGION"]
     instance_type = os.environ.get("INSTANCE_TYPE", "ml.m5.large")
     epochs = float(os.environ.get("EPOCHS", "0.00001"))
@@ -48,8 +48,8 @@ def main():
     sagemaker_session = sagemaker.Session()
 
     # Training data paths
-    input_path = f"s3://{s3_bucket}/data/"
-    output_path = f"s3://{s3_bucket}/models/"
+    input_path = "train_data.txt"
+    output_path = ""
 
     # Hyperparameters
     hyperparameters = {
@@ -85,7 +85,6 @@ def main():
         "max_run": 3600 * 6,  # 6 hours max
         "tags": tags,
         "enable_sagemaker_metrics": True,
-        "image_config": {"TrainingRepositoryAccessMode": "Platform"},
     }
 
     # Add spot instance configuration if requested
