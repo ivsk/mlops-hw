@@ -25,7 +25,7 @@ def download_artifacts(model_name: str) -> None:
 
     latest_model_version = client.get_latest_versions(model_name)[0]
     client.download_artifacts(
-        run_id=latest_model_version.run_id, path=model_name, dst_path=os.getcwd()
+        run_id=latest_model_version.run_id, path="model", dst_path=os.getcwd()
     )
 
     logger.info(f"Artifacts downloaded with run ID: {latest_model_version.run_id}")
