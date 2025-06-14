@@ -33,7 +33,7 @@ jobs:
             --stack-name $STACK_NAME \
             --parameter-overrides \
                 InstanceType=t2.large \
-                KeyName=${{ secrets.SSH_KEY_NAME }} \
+                KeyName=infratest \
                 VpcId=${{ secrets.VPC_ID }} \
                 SubnetId=${{ secrets.SUBNET_ID }} \
             --capabilities CAPABILITY_NAMED_IAM
