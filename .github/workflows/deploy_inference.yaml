@@ -1,0 +1,71 @@
+name: Deploy EC2 Instance
+
+on:
+  #push:
+  #  branches:
+  #    - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Retrieve EC2 Instance ID
+        id: get_instance_id
+        run: |
+          INSTANCE_ID=$(aws cloudformation describe-stacks \
+            --stack-name ec2-deployment-stack \
+            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+            --output text)
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids $INSTANCE_ID \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+
+      - name: Set up SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > ssh_key
+          chmod 600 ssh_key
+          echo ${{ env.PUBLIC_IP }}
+    
+      - name: Install Docker via SSH
+        env:
+          HOST: ${{ env.PUBLIC_IP }}
+          USERNAME: ubuntu
+        run: |
+          ssh -i ssh_key -o StrictHostKeyChecking=no $USERNAME@$HOST '
+            snap install aws-cli --classic
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 212383650267.dkr.ecr.us-east-1.amazonaws.com
+            sudo docker pull 212383650267.dkr.ecr.us-east-1.amazonaws.com/bert/inference:dca789c
+            sudo docker run -p 8000:8000 212383650267.dkr.ecr.us-east-1.amazonaws.com/bert/inference:dca789c
+            ' 
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 sagemaker mlflow==2.16.2 sagemaker-mlflow==0.1.0 requests
+      
+      - name: Perform smoke testing
+        env:
+            HOST: ${{ env.PUBLIC_IP }}
+            USERNAME: ubuntu
+        run: |
+          python infer/tests/smoke_test.py

@@ -1,12 +1,13 @@
 import requests
 import time
 import sys
+import os
 
 payload = {"data": "What is love, baby don't hurt me!"}
-url = "http://localhost:8000/predict"
-health_url = "http://localhost:8000"
+ip_address = os.environ.get(["PUBLIC_IP"])
+url = f"http://{ip_address}:8000/predict"
 
-for _ in range(1):
+for _ in range(10):
     try:
         r = requests.post(url, json=payload, timeout=15)
         if r.status_code == 200:
