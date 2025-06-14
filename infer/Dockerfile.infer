@@ -1,13 +1,15 @@
-FROM python3.11-slim
+FROM python:3.11-slim
 
 ENV TRANSFORMERS_OFFLINE=1
 ENV HF_HOME='/tmp/hf_home'
 
-COPY ./infer/app /home/appuser
-COPY ./infer/requirements.txt /home/appuser
+WORKDIR app
+
+COPY ./app ./
+COPY ./requirements.txt ./
 
 RUN python3.11 -m venv venv \
-    && source venv/bin/activate \
+    && . venv/bin/activate \
     && python3.11 -m pip install --no-cache-dir -r requirements.txt --default-timeout=60
 
-CMD ["/bin/sh" "-c", ". venv/bin/activate/ && python genre_classifier.py"]
+CMD [ "venv/bin/python", "genre_classifier.py" ]
