@@ -65,7 +65,6 @@ jobs:
           chmod 600 ssh_key
           echo ${{ env.PUBLIC_IP }}
     
-
       - name: Install Docker via SSH
         env:
           HOST: ${{ env.PUBLIC_IP }}
