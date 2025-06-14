@@ -4,7 +4,7 @@ import sys
 import os
 
 payload = {"data": "What is love, baby don't hurt me!"}
-ip_address = os.environ.get(["PUBLIC_IP"])
+ip_address = os.environ.get("PUBLIC_IP")
 url = f"http://{ip_address}:8000/predict"
 
 for _ in range(10):
