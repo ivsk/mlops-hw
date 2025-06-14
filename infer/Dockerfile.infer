@@ -8,8 +8,8 @@ ENV LABELS_PATH='label_mappings.json'
 
 WORKDIR app
 
-COPY ./app ./
-COPY ./requirements.txt ./
+COPY /infer/app ./
+COPY /infer/requirements.txt ./
 
 RUN python3.11 -m venv venv \
     && . venv/bin/activate \
