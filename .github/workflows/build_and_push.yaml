@@ -161,7 +161,7 @@ jobs:
     
     - name: Perform unit tests
       run: |
-        python -m unittest infer/tests/unittests.py
+        python -m unittest infer/tests/unit_tests.py
 
     - name: Download model artifacts
       env:
