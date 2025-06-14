@@ -166,6 +166,7 @@ jobs:
       run: |
         python .github/scripts/download_artifacts.py --model_name bert-genre-classifier
         ls -lha
+        mv model/* infer/app/
 
     - name: Build and push inference image
       id: build-inference
