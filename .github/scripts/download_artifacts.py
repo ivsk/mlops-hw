@@ -19,7 +19,7 @@ def setup_mlflow():
 def download_artifacts(model_name: str) -> None:
     client = mlflow.MlflowClient()
 
-    latest_model_version = client.get_latest_version(model_name)[0]
+    latest_model_version = client.get_latest_versions(model_name)[0]
     client.download_artifacts(
         run_id=latest_model_version.run_id, path=model_name, dst_path=os.getcwd()
     )
