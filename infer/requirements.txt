@@ -1,0 +1,4 @@
+transformers==4.39.2
+torch==2.2.2
+litserve
+numpy==1.26.4
