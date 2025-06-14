@@ -1,4 +1,4 @@
-name: Deploy EC2 Instance and Configure Milvus
+name: Deploy EC2 Instance
 
 on:
   #push:
