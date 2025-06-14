@@ -10,13 +10,17 @@ logger = logging.getLogger("mlflow_download_artifacts")
 
 
 def setup_mlflow():
-    boto_session = boto3.Session()
-    sagemaker_session = sagemaker.Session(boto_session=boto_session)
-    sagemaker_client = boto_session.client(service_name="sagemaker")
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_SERVER_ARN"))
+    try:
+        boto_session = boto3.Session()
+        sagemaker_session = sagemaker.Session(boto_session=boto_session)
+        sagemaker_client = boto_session.client(service_name="sagemaker")
+        mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_SERVER_ARN"))
+    except Exception as e:
+        logger.error(f"Error: {e}")
 
 
 def download_artifacts(model_name: str) -> None:
+    setup_mlflow()
     client = mlflow.MlflowClient()
 
     latest_model_version = client.get_latest_versions(model_name)[0]
