@@ -31,6 +31,7 @@ on:
 env:
   AWS_REGION: us-east-1
   TRAINING_ECR_REPOSITORY: bert/training
+  $INFERENCE_ECR_REPOSITORY: bert/inference
 
 jobs:
   build-training-image:
@@ -148,7 +149,24 @@ jobs:
           echo "exists=false" >> $GITHUB_OUTPUT
           echo "Inference image with tag $IMAGE_TAG does not exist"
         fi
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
         
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install boto3 sagemaker mlflow
+    
+    - name: Download model artifacts
+      env:
+        MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
+      run: |
+        python .github/scripts/download_artifacts.py
+        ls -lha
+
     - name: Build and push inference image
       id: build-inference
       if: ${{ steps.check-inference-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
@@ -156,37 +174,18 @@ jobs:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
       run: |
-        # Create ECR repository if it doesn't exist
-        aws ecr-public describe-repositories --repository-names $INFERENCE_ECR_REPOSITORY || \
-        aws ecr-public create-repository --repository-name $INFERENCE_ECR_REPOSITORY
         
         # Build inference image
         echo "🔨 Building inference image..."
-        docker build -f Dockerfile.inference -t $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG .
-        
-        # Tag for ECR
-        docker tag $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG
-        docker tag $INFERENCE_ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
+        docker build -f infer/Dockerfile.infer -t $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG .
         
         # Push to ECR
-        echo "📤 Pushing inference image..."
+        echo "📤 Pushing training image..."
         docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
         
         IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG"
         echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-        echo "✅ Inference image built and pushed: $IMAGE_URI"
-        
-    - name: Use existing inference image
-      id: use-existing-inference
-      if: ${{ steps.check-inference-image.outputs.exists == 'true' && github.event.inputs.force_rebuild != 'true' }}
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
-      run: |
-        IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG"
-        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-        echo "♻️ Using existing inference image: $IMAGE_URI"
+        echo "✅ Training image built and pushed: $IMAGE_URI"
 
   summary:
     runs-on: ubuntu-latest
