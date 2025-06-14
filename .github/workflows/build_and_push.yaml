@@ -164,7 +164,7 @@ jobs:
       env:
         MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
       run: |
-        python .github/scripts/download_artifacts.py
+        python .github/scripts/download_artifacts.py --model_name bert-genre-classifier
         ls -lha
 
     - name: Build and push inference image
