@@ -159,12 +159,15 @@ jobs:
         python -m pip install --upgrade pip
         pip install boto3 sagemaker mlflow==2.16.2 sagemaker-mlflow==0.1.0
     
+    - name: Perform unit tests
+      run: |
+        python -m unittest infer/tests/unittests.py
+
     - name: Download model artifacts
       env:
         MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
       run: |
         python .github/scripts/download_artifacts.py --model_name bert-genre-classifier
-        ls -lha
         mv model/* infer/app/
 
     - name: Build and push inference image
