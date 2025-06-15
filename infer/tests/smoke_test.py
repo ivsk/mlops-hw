@@ -12,11 +12,9 @@ logger = logging.getLogger("comprehensive_smoke_test")
 
 # Get configuration from environment variables
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_SERVER_ARN")
-MLFLOW_EXPERIMENT_NAME = os.environ.get(
-    "MLFLOW_EXPERIMENT_NAME", "BERT_Classifier_Smoke_Tests"
-)
 PUBLIC_IP = os.environ.get("PUBLIC_IP")
 EC2_INSTANCE_ID = os.environ.get("EC2_INSTANCE_ID")
+MODEL_NAME = os.environ.get("MODEL_NAME")
 
 if not all([MLFLOW_TRACKING_URI, PUBLIC_IP, EC2_INSTANCE_ID]):
     raise ValueError(
@@ -25,7 +23,9 @@ if not all([MLFLOW_TRACKING_URI, PUBLIC_IP, EC2_INSTANCE_ID]):
 
 # --- Test Parameters ---
 TARGET_URL = f"http://{PUBLIC_IP}:8000/predict"
-TEST_PAYLOAD = {"data": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla et nibh vel neque bibendum ultricies. Nunc pharetra et felis non semper."}
+TEST_PAYLOAD = {
+    "data": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla et nibh vel neque bibendum ultricies. Nunc pharetra et felis non semper."
+}
 NUM_REQUESTS = 20  # Number of requests to send to simulate a small load
 REQUEST_TIMEOUT = 15  # Seconds
 
@@ -34,12 +34,13 @@ def setup_mlflow():
     """Sets the MLflow tracking URI and experiment."""
     try:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-        logger.info(f"MLflow tracking URI set to: {MLFLOW_TRACKING_URI}")
-        logger.info(f"MLflow experiment set to: {MLFLOW_EXPERIMENT_NAME}")
+        client = mlflow.MlflowClient()
+        latest_model_version = client.get_latest_versions(MODEL_NAME)[0]
+
     except Exception as e:
         logger.error(f"Error setting up MLflow: {e}")
         raise
+    return latest_model_version
 
 
 def get_ec2_metrics(instance_id: str):
@@ -123,90 +124,96 @@ def run_smoke_test():
     Runs the main smoke test logic, including performance and resource checks,
     and logs the results to MLflow.
     """
-    setup_mlflow()
+    latest_model_version = setup_mlflow()
+    model_run_id = latest_model_version.run_id
 
-    with mlflow.start_run() as run:
-        logger.info(f"Started MLflow Run: {run.info.run_id}")
+    # --- Log Parameters for reproducibility ---
+    mlflow.log_params("target_url", TARGET_URL, run_id=model_run_id)
+    mlflow.log_params("ec2_instance_id", EC2_INSTANCE_ID, run_id=model_run_id)
+    mlflow.log_params("num_requests", NUM_REQUESTS, run_id=model_run_id)
 
-        # --- Log Parameters for reproducibility ---
-        mlflow.log_param("target_url", TARGET_URL)
-        mlflow.log_param("ec2_instance_id", EC2_INSTANCE_ID)
-        mlflow.log_param("num_requests", NUM_REQUESTS)
+    successful_requests = 0
+    failed_requests = 0
+    latencies = []
 
-        successful_requests = 0
-        failed_requests = 0
-        latencies = []
+    # --- Load and Latency Test Loop ---
+    for i in range(NUM_REQUESTS):
+        try:
+            start_time = time.time()
+            r = requests.post(TARGET_URL, json=TEST_PAYLOAD, timeout=REQUEST_TIMEOUT)
+            end_time = time.time()
 
-        # --- Load and Latency Test Loop ---
-        for i in range(NUM_REQUESTS):
-            try:
-                start_time = time.time()
-                r = requests.post(
-                    TARGET_URL, json=TEST_PAYLOAD, timeout=REQUEST_TIMEOUT
+            latency = (end_time - start_time) * 1000  # in milliseconds
+            latencies.append(latency)
+            mlflow.log_metrics(
+                "request_latency_ms", latency, step=i, run_id=model_run_id
+            )
+
+            if r.status_code == 200:
+                successful_requests += 1
+                logger.info(
+                    f"Request {i+1}/{NUM_REQUESTS}: SUCCESS (Status: {r.status_code}, Latency: {latency:.2f} ms)"
                 )
-                end_time = time.time()
-
-                latency = (end_time - start_time) * 1000  # in milliseconds
-                latencies.append(latency)
-                mlflow.log_metric("request_latency_ms", latency, step=i)
-
-                if r.status_code == 200:
-                    successful_requests += 1
-                    logger.info(
-                        f"Request {i+1}/{NUM_REQUESTS}: SUCCESS (Status: {r.status_code}, Latency: {latency:.2f} ms)"
-                    )
-                else:
-                    failed_requests += 1
-                    logger.warning(
-                        f"Request {i+1}/{NUM_REQUESTS}: FAILED (Status: {r.status_code}, Response: {r.text})"
-                    )
-
-            except requests.exceptions.RequestException as e:
+            else:
                 failed_requests += 1
-                logger.error(f"Request {i+1}/{NUM_REQUESTS}: FAILED (Exception: {e})")
+                logger.warning(
+                    f"Request {i+1}/{NUM_REQUESTS}: FAILED (Status: {r.status_code}, Response: {r.text})"
+                )
 
-            time.sleep(0.5)  # Small delay between requests
+        except requests.exceptions.RequestException as e:
+            failed_requests += 1
+            logger.error(f"Request {i+1}/{NUM_REQUESTS}: FAILED (Exception: {e})")
 
-        # --- Log Summary Metrics ---
-        if latencies:
-            mlflow.log_metric("avg_latency_ms", sum(latencies) / len(latencies))
-            mlflow.log_metric(
-                "p95_latency_ms", sorted(latencies)[int(len(latencies) * 0.95)]
-            )
-            mlflow.log_metric("max_latency_ms", max(latencies))
+        time.sleep(0.5)  # Small delay between requests
 
-        success_rate = (successful_requests / NUM_REQUESTS) * 100
-        mlflow.log_metric("success_rate_percent", success_rate)
-        logger.info(f"Test Summary: Success Rate = {success_rate:.2f}%")
+    # --- Log Summary Metrics ---
+    if latencies:
+        mlflow.log_metrics(
+            "avg_latency_ms", sum(latencies) / len(latencies), run_id=model_run_id
+        )
+        mlflow.log_metrics(
+            "p95_latency_ms",
+            sorted(latencies)[int(len(latencies) * 0.95)],
+            run_id=model_run_id,
+        )
+        mlflow.log_metrics("max_latency_ms", max(latencies), run_id=model_run_id)
 
-        # --- Resource Utilization Test ---
-        # Fetch metrics *after* the load test to see the impact
-        resource_metrics = get_ec2_metrics(EC2_INSTANCE_ID)
-        if resource_metrics["avg_cpu_utilization"] is not None:
-            mlflow.log_metric(
-                "avg_cpu_utilization", resource_metrics["avg_cpu_utilization"]
-            )
-            logger.info(
-                f"Logged CPU Utilization: {resource_metrics['avg_cpu_utilization']:.2f}%"
-            )
+    success_rate = (successful_requests / NUM_REQUESTS) * 100
+    mlflow.log_metrics("success_rate_percent", success_rate, run_id=model_run_id)
+    logger.info(f"Test Summary: Success Rate = {success_rate:.2f}%")
 
-        if resource_metrics["avg_memory_utilization"] is not None:
-            mlflow.log_metric(
-                "avg_memory_utilization", resource_metrics["avg_memory_utilization"]
-            )
-            logger.info(
-                f"Logged Memory Utilization: {resource_metrics['avg_memory_utilization']:.2f}%"
-            )
+    # --- Resource Utilization Test ---
+    # Fetch metrics *after* the load test to see the impact
+    resource_metrics = get_ec2_metrics(EC2_INSTANCE_ID)
+    if resource_metrics["avg_cpu_utilization"] is not None:
+        mlflow.log_metrics(
+            "avg_cpu_utilization",
+            resource_metrics["avg_cpu_utilization"],
+            run_id=model_run_id,
+        )
+        logger.info(
+            f"Logged CPU Utilization: {resource_metrics['avg_cpu_utilization']:.2f}%"
+        )
 
-        # --- Set Final Test Status Tag ---
-        if success_rate > 95:
-            mlflow.set_tag("smoke_test_status", "PASSED")
-            logger.info("Smoke test PASSED")
-        else:
-            mlflow.set_tag("smoke_test_status", "FAILED")
-            logger.error("Smoke test FAILED")
-            # Optionally, raise an exception to fail a CI/CD pipeline
-            # raise Exception("Smoke test failed with success rate below 95%")
+    if resource_metrics["avg_memory_utilization"] is not None:
+        mlflow.log_metrics(
+            "avg_memory_utilization",
+            resource_metrics["avg_memory_utilization"],
+            run_id=model_run_id,
+        )
+        logger.info(
+            f"Logged Memory Utilization: {resource_metrics['avg_memory_utilization']:.2f}%"
+        )
+
+    # --- Set Final Test Status Tag ---
+    if success_rate > 95:
+        mlflow.set_registered_model_tag(MODEL_NAME, "smoke_test_status", "PASSED")
+        logger.info("Smoke test PASSED")
+    else:
+        mlflow.set_tag(MODEL_NAME, "smoke_test_status", "FAILED")
+        logger.error("Smoke test FAILED")
+        # Optionally, raise an exception to fail a CI/CD pipeline
+        # raise Exception("Smoke test failed with success rate below 95%")
 
 
 if __name__ == "__main__":
