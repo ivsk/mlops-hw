@@ -75,6 +75,12 @@ jobs:
         python -m pip install --upgrade pip
         pip install boto3 sagemaker mlflow==2.16.2 sagemaker-mlflow==0.1.0
     
+    - name: Alias the model in mlflow as challenger
+      env:
+        MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
+      run: |
+        python .github/scripts/model_aliasing.py --model_name bert-genre-classifier --alias challenger
+
     - name: Perform unit tests
       run: |
         python -m unittest infer/tests/unit_tests.py
@@ -137,11 +143,11 @@ jobs:
         
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "🚀 **Next Steps**: Use these images in training or deployment workflows" >> $GITHUB_STEP_SUMMARY
+  
   call-deploy:
     needs: build-inference-image
     if: github.ref_name == 'main'
     uses: ./.github/workflows/deploy-inference.yml
     with:
       image_version: ${{ needs.build-inference-image.outputs.inference_image_tag }}
-      environment: staging
     secrets: inherit
