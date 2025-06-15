@@ -1,4 +1,4 @@
-name: Build Docker Images
+name: Build Inference Docker Images
 
 on:
   push:
@@ -14,7 +14,6 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  TRAINING_ECR_REPOSITORY: bert/training
   INFERENCE_ECR_REPOSITORY: bert/inference
 
 jobs:      
@@ -114,23 +113,13 @@ jobs:
 
   summary:
     runs-on: ubuntu-latest
-    needs: [build-training-image, build-inference-image]
+    needs: build-inference-image
     if: always()
     
     steps:
     - name: Build Summary
       run: |
         echo "## 🔨 Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        if [ "${{ needs.build-training-image.result }}" == "success" ]; then
-          echo "✅ **Training Image**: Built successfully" >> $GITHUB_STEP_SUMMARY
-          echo "   - URI: ${{ needs.build-training-image.outputs.training_image_uri }}" >> $GITHUB_STEP_SUMMARY
-          echo "   - Tag: ${{ needs.build-training-image.outputs.training_image_tag }}" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ **Training Image**: Build failed or skipped" >> $GITHUB_STEP_SUMMARY
-        fi
-        
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ "${{ needs.build-inference-image.result }}" == "success" ]; then
@@ -142,12 +131,11 @@ jobs:
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "🚀 **Next Steps**: Use these images in training or deployment workflows" >> $GITHUB_STEP_SUMMARY
-  
+
   call-deploy:
     needs: build-inference-image
     if: github.ref_name == 'main'
-    uses: ./.github/workflows/deploy-inference.yml
+    uses: .github/workflows/deploy-inference.yml
     with:
       image_version: ${{ needs.build-inference-image.outputs.inference_image_tag }}
     secrets: inherit
