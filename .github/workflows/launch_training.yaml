@@ -1,11 +1,11 @@
-name: SageMaker Training Pipeline
+name: SageMaker Retraining Pipeline
 
 on:
-  #push:
-  #  branches: [ main, develop ]
-  #pull_request:
-  #  branches: [ main ]
-  workflow_dispatch:  # Allow manual triggering
+  schedule:
+    - cron: '0 5 * * *'
+
+  # Allow manual triggering for testing and on-demand runs
+  workflow_dispatch:
     inputs:
       instance_type:
         description: 'SageMaker training instance type'
@@ -13,76 +13,112 @@ on:
         default: 'ml.m5.large'
         type: choice
         options:
-        - ml.m5.large
-        - ml.m5.xlarge
-        - ml.p3.2xlarge
-        - ml.g4dn.xlarge
+          - ml.m5.large
+          - ml.m5.xlarge
+          - ml.p3.2xlarge
+          - ml.g4dn.xlarge
       epochs:
         description: 'Number of training epochs'
         required: false
-        default: '0.0001'
+        default: '3' # A more sensible default for epochs
         type: string
       use_spot:
         description: 'Use spot instances'
         required: false
         default: true
         type: boolean
+      # Allow manually specifying a data path, overriding the daily check
+      manual_data_path:
+        description: 'Optional S3 path for training data (e.g., s3://my-bucket/data.csv)'
+        required: false
+        type: string
 
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: bert/training
   S3_BUCKET: ${{ secrets.S3_BUCKET_NAME }}
+  IMAGE_NAME: bert-genre-classifier
 
 jobs:
+  check-for-new-data:
+    runs-on: ubuntu-latest
+    outputs:
+      new_data_found: ${{ steps.check_s3.outputs.new_data_found }}
+      data_path: ${{ steps.check_s3.outputs.data_path }}
+    # Only run the check for scheduled events. For manual triggers, we assume we always want to run.
+    if: github.event_name == 'schedule' || github.event.inputs.manual_data_path == ''
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install boto3
+
+      - name: Check for new data in S3
+        id: check_s3
+        run: python .github/scripts/check_s3_for_new_data.py
+
   build-and-train:
     runs-on: ubuntu-latest
-    
+    # This job depends on the check and only runs if new data is found or if it's a manual trigger
+    needs: check-for-new-data
+    if: |
+      always() && (
+        github.event_name == 'workflow_dispatch' ||
+        needs.check-for-new-data.outputs.new_data_found == 'true'
+      )
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-        
-    - name: Login to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Get commit hash
-      id: get-commit-hash
-      run: echo "commit_hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-      
-    - name: Build, tag, and push image to Amazon ECR
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        REGISTRY_ALIAS: z7k4k3d4
-        IMAGE_TAG: ${{ steps.get-commit-hash.outputs.commit_hash }}
-      run: |
-        # Create ECR repository if it doesn't exist
-        aws ecr-public describe-repositories --repository-names $ECR_REPOSITORY
-        echo "image_uri=$ECR_REGISTRY/$ECR_REPOSITORY:5d8f0a4" >> $GITHUB_ENV
-        
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install boto3 sagemaker
-        
-    - name: Launch SageMaker training job
-      env:
-        IMAGE_URI: ${{ env.image_uri }}
-        SAGEMAKER_ROLE: ${{ secrets.SAGEMAKER_EXECUTION_ROLE }}
-        INSTANCE_TYPE: ${{ github.event.inputs.instance_type || 'ml.m5.large' }}
-        EPOCHS: ${{ github.event.inputs.epochs || '0.0001' }}
-        USE_SPOT: ${{ github.event.inputs.use_spot || 'true' }}
-      run: |
-        python .github/scripts/launch_training.py
-        
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get latest training image
+        id: get-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          # Create ECR repository if it doesn't exist
+          echo "image_uri=$ECR_REGISTRY/${{ env.ECR_REPOSITORY }}:latest" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 sagemaker
+
+      - name: Launch SageMaker training job
+        env:
+          IMAGE_URI: ${{ steps.get-image.outputs.image_uri }}
+          SAGEMAKER_ROLE: ${{ secrets.SAGEMAKER_EXECUTION_ROLE }}
+          S3_DATA_PATH: ${{ github.event.inputs.manual_data_path || needs.check-for-new-data.outputs.data_path }}
+          INSTANCE_TYPE: ${{ github.event.inputs.instance_type || 'ml.m5.large' }}
+          EPOCHS: ${{ github.event.inputs.epochs || '3' }}
+          USE_SPOT: ${{ github.event.inputs.use_spot || 'true' }}
+        run: |
+          python .github/scripts/launch_training.py
