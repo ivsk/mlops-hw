@@ -1,35 +1,47 @@
 name: Build Inference Docker Images
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infer/**'
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
   INFERENCE_ECR_REPOSITORY: bert/inference
+  TRAINING_ECR_REPOSITORY: bert/training
 
 jobs:      
   build-inference-image:
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.build_inference != 'false' }}
     outputs:
-      inference_image_uri: ${{ steps.build-inference.outputs.image_uri }}
-      inference_image_tag: ${{ steps.get-tag.outputs.tag }}
+      inference_image_uri: ${{ steps.build-push-inference.outputs.image_uri }}
+      inference_image_tag: ${{ steps.tagger.outputs.new_tag }}
       
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Get image tag
-      id: get-tag
+      with:
+        fetch-depth: 0
+    
+    - name: Bump version and push tag
+      id: tagger
+      uses: anothrNick/github-tag-action@1.67.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        DEFAULT_BUMP: patch
+        PREFIX: "inf-v"
+    
+    - name: Read base training image version
+      id: get-base-version
       run: |
-        if [ "${{ github.event_name }}" == "pull_request" ]; then
-          TAG="pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
-        else
-          TAG="$(git rev-parse --short HEAD)"
-        fi
-        echo "tag=$TAG" >> $GITHUB_OUTPUT
-        echo "Using tag: $TAG"
-
+        BASE_TAG=$(cat TRAINING_IMAGE_VERSION)
+        echo "Using base training image version: $BASE_TAG"
+        echo "base_tag=$BASE_TAG" >> $GITHUB_OUTPUT
+    
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -83,24 +95,32 @@ jobs:
         mv model/* infer/app/
 
     - name: Build and push inference image
-      id: build-inference
-      if: ${{ steps.check-inference-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
+      id: build-push-inference
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+        BASE_IMAGE_TAG: ${{ steps.get-base-version.outputs.base_tag }}
+        INFERENCE_IMAGE_TAG: ${{ steps.tagger.outputs.new_tag }}
       run: |
-        
-        # Build inference image
-        echo "🔨 Building inference image..."
-        docker build -f infer/Dockerfile.infer -t $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG .
+        BASE_IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$BASE_IMAGE_TAG"
+        INFERENCE_IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$INFERENCE_IMAGE_TAG"
 
-        # Push to ECR
-        echo "📤 Pushing training image..."
-        docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG
+        echo "🔨 Building inference image $INFERENCE_IMAGE_URI"
+        echo "FROM base image $BASE_IMAGE_URI"
+
+        docker build \
+          --build-arg BASE_IMAGE_URI=$BASE_IMAGE_URI \
+          -f infer/Dockerfile.infer \
+          -t $INFERENCE_IMAGE_URI .
+
+        echo "📤 Pushing inference image..."
+        docker push $INFERENCE_IMAGE_URI
+
+        # Also tag as 'latest' for convenience
+        docker tag $INFERENCE_IMAGE_URI $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:latest
         
-        IMAGE_URI="$ECR_REGISTRY/$INFERENCE_ECR_REPOSITORY:$IMAGE_TAG"
-        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-        echo "✅ Inference image built and pushed: $IMAGE_URI"
+        echo "image_uri=$INFERENCE_IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "✅ Inference image built and pushed: $INFERENCE_IMAGE_URI"
 
   summary:
     runs-on: ubuntu-latest
@@ -122,11 +142,3 @@ jobs:
         fi
         
         echo "" >> $GITHUB_STEP_SUMMARY
-
-  call-deploy:
-    needs: build-inference-image
-    if: github.ref_name == 'main'
-    uses: .github/workflows/deploy-inference.yml
-    with:
-      image_version: ${{ needs.build-inference-image.outputs.inference_image_tag }}
-    secrets: inherit

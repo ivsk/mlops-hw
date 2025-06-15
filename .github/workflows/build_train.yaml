@@ -2,33 +2,40 @@ name: Build Docker Images
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: 
+      - main
     paths:
-      - 'Dockerfile*'
-      - 'requirements.txt'
-      - 'train.py'
-      - 'inference.py'
-      - 'train'
-      - 'serve'
+      - 'train/**'
   workflow_dispatch:
 
 env:
   AWS_REGION: us-east-1
   TRAINING_ECR_REPOSITORY: bert/training
-  INFERENCE_ECR_REPOSITORY: bert/inference
+
+permissions:
+  contents: write
 
 jobs:
   build-training-image:
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.build_training != 'false' }}
     outputs:
-      training_image_uri: ${{ steps.build-training.outputs.image_uri }}
-      training_image_tag: ${{ steps.get-tag.outputs.tag }}
+      new_version: ${{ steps.tagger.outputs.new_tag }}
+      image_uri: ${{ steps.build-push.outputs.image_uri }}
       
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        fetch-depth: 0
+    
+    - name: Bump version and push tag
+      id: tagger
+      uses: anothrNick/github-tag-action@1.67.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        DEFAULT_BUMP: patch
+        PREFIX: "train-v"
+
     - name: Get image tag
       id: get-tag
       run: |
@@ -66,23 +73,34 @@ jobs:
         fi
         
     - name: Build and push training image
-      id: build-training
-      if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
+      id: build-push
       env:
         ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+        IMAGE_TAG: ${{ steps.tagger.outputs.new_tag }}
       run: |
-        # Create ECR repository if it doesn't exist
-        aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
-        # Build training image
-        echo "🔨 Building training image..."
-        docker build -f train/Dockerfile.train -t $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
-        
-        # Push to ECR
-        echo "📤 Pushing training image..."
-        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
-        
         IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+         
+        echo "🔨 Building training image with tag $IMAGE_TAG..."
+        docker build -f training/Dockerfile.train -t $IMAGE_URI .
+
+        echo "📤 Pushing training image..."
+        docker push $IMAGE_URI
+
+        docker tag $IMAGE_URI $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:latest
+
         echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
-        echo "✅ Training image built and pushed: $IMAGE_URI"
+        echo "✅ Training image pushed: $IMAGE_URI"
+
+    - name: Update version file
+      run: |
+        echo "Updating TRAINING_IMAGE_VERSION to ${{ steps.tagger.outputs.new_tag }}"
+        echo "${{ steps.tagger.outputs.new_tag }}" > TRAINING_IMAGE_VERSION
+
+    - name: Commit updated version file
+      uses: stefanzweifel/git-auto-commit-action@v5
+      with:
+        commit_message: "ci: Update training image version to ${{ steps.tagger.outputs.new_tag }}"
+        file_pattern: TRAINING_IMAGE_VERSION
+        commit_options: '--no-verify'
         
