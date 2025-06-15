@@ -1,15 +1,6 @@
 name: Build Inference Docker Images
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths:
-      - 'Dockerfile*'
-      - 'requirements.txt'
-      - 'train.py'
-      - 'inference.py'
-      - 'train'
-      - 'serve'
   workflow_dispatch:
 
 env:

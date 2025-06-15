@@ -52,11 +52,6 @@ def parse_args():
     parser.add_argument(
         "--mlflow-experiment-name", type=str, default="bert-genre-classifier"
     )
-    parser.add_argument("--github-actor", type=str, default="unknown")
-    parser.add_argument("--github-repo", type=str, default="unknown")
-    parser.add_argument("--github-sha", type=str, default="unknown")
-    parser.add_argument("--github-ref", type=str, default="unknown")
-
     return parser.parse_args()
 
 
@@ -138,81 +133,19 @@ def compute_metrics(pred):
     return {"accuracy": acc, "f1": f1, "precision": precision, "recall": recall}
 
 
-class MLflowCallback:
-    """Custom callback for MLflow logging during training"""
-
-    def __init__(self, mlflow_enabled=True):
-        self.mlflow_enabled = mlflow_enabled
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
-        """Called when training logs are generated"""
-        if not self.mlflow_enabled or logs is None:
-            return
-
-        try:
-            # Log training metrics
-            step = state.global_step
-            for key, value in logs.items():
-                if isinstance(value, (int, float)):
-                    mlflow.log_metric(key, value, step=step)
-        except Exception as e:
-            print(f"⚠️ Warning: MLflow logging failed: {e}")
-
-    def on_train_end(self, args, state, control, **kwargs):
-        """Called at the end of training"""
-        if not self.mlflow_enabled:
-            return
-
-        try:
-            # Log final training state
-            mlflow.log_metric("final_global_step", state.global_step)
-            mlflow.log_metric("final_epoch", state.epoch)
-            print("✅ Training metrics logged to MLflow")
-        except Exception as e:
-            print(f"⚠️ Warning: Final MLflow logging failed: {e}")
-
-
-def log_model_to_mlflow(
-    model, tokenizer, args, eval_results, training_metadata, mlflow_enabled
-):
+def log_model_to_mlflow(model, tokenizer):
     """Log model and artifacts to MLflow"""
-    if not mlflow_enabled:
-        return None
-
     try:
-        # Create a temporary directory for model artifacts
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Save model and tokenizer
-            model_path = os.path.join(temp_dir, "model")
-            model.save_pretrained(model_path)
-            tokenizer.save_pretrained(model_path)
-
-            # Log model to MLflow
-            mlflow.pytorch.log_model(
-                pytorch_model=model,
-                artifact_path="model",
-                registered_model_name="bert-genre-classifier",
-                pip_requirements=[
-                    "torch",
-                    "transformers",
-                    "sklearn",
-                    "pandas",
-                    "numpy",
-                ],
-            )
-
-            # Log model artifacts
-            mlflow.log_artifacts(model_path, "model_files")
-
-            print("✅ Model logged to MLflow")
-
-            # Get the logged model URI
-            run_id = mlflow.active_run().info.run_id
-            model_uri = f"runs:/{run_id}/model"
-            return model_uri
-
+        components = {"model": model, "tokenizer": tokenizer}
+        # Log model to MLflow
+        mlflow.transformers.log_model(
+            artifact_path="model", transformers_model=components, name="model"
+        )
+        print("✅ Model logged to MLflow")
+        # Get the logged model URI
+        run_id = mlflow.active_run().info.run_id
+        model_uri = f"runs:/{run_id}/model"
+        return model_uri
     except Exception as e:
         print(f"⚠️ Warning: Model logging to MLflow failed: {e}")
         return None
@@ -242,10 +175,6 @@ def main():
             # Log Git and training context
             mlflow.set_tags(
                 {
-                    "github.actor": args.github_actor,
-                    "github.repository": args.github_repo,
-                    "github.sha": args.github_sha,
-                    "github.ref": args.github_ref,
                     "sagemaker.training_job_name": training_job_name,
                     "model.framework": "pytorch",
                     "model.type": "text_classification",
@@ -399,13 +328,7 @@ def main():
             greater_is_better=True,
             fp16=torch.cuda.is_available(),
             save_total_limit=1,
-            report_to=None,  # Disable external reporting - we use custom MLflow callback
         )
-
-        # Initialize trainer with MLflow callback
-        callbacks = []
-        if mlflow_enabled:
-            callbacks.append(MLflowCallback(mlflow_enabled))
 
         trainer = Trainer(
             model=model,
@@ -414,7 +337,6 @@ def main():
             eval_dataset=val_dataset,
             tokenizer=tokenizer,
             compute_metrics=compute_metrics,
-            callbacks=callbacks,
         )
 
         # Train
@@ -429,36 +351,30 @@ def main():
         for key, value in eval_results.items():
             print(f"  {key}: {value:.4f}")
 
-        # Log final evaluation metrics to MLflow
-        if mlflow_enabled:
-            try:
-                for key, value in eval_results.items():
-                    if isinstance(value, (int, float)):
-                        mlflow.log_metric(f"final_{key}", value)
+        try:
+            for key, value in eval_results.items():
+                if isinstance(value, (int, float)):
+                    mlflow.log_metric(f"final_{key}", value)
 
-                # Log training results
-                for key, value in training_result.metrics.items():
-                    if isinstance(value, (int, float)):
-                        mlflow.log_metric(f"training_{key}", value)
-
-            except Exception as e:
-                print(f"⚠️ Warning: Failed to log final metrics to MLflow: {e}")
-
-        # Save model and tokenizer
-        print(f"\nSaving model to {args.model_dir}")
-        trainer.save_model(args.model_dir)
+            # Log training results
+            for key, value in training_result.metrics.items():
+                if isinstance(value, (int, float)):
+                    mlflow.log_metric(f"training_{key}", value)
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to log final metrics to MLflow: {e}")
 
         # Save label mappings
-        label_map_path = os.path.join(args.model_dir, "label_mappings.pth")
-        torch.save(
-            {
-                "genre_to_id": genre_to_id,
-                "id_to_genre": id_to_genre,
-                "num_labels": num_labels,
-            },
+        label_map_path = os.path.join(args.model_dir, "label_mappings.json")
+        labels = {
+            "genre_to_id": genre_to_id,
+            "id_to_genre": id_to_genre,
+        }
+        with open(label_map_path, "w", encoding="UTF-8") as f:
+            json.dump(labels, f)
+
+        mlflow.log_artifact(
             label_map_path,
         )
-        print(f"Label mappings saved to {label_map_path}")
 
         # Prepare training metadata
         training_metadata = {
@@ -481,12 +397,7 @@ def main():
         }
 
         # Log model to MLflow
-        model_uri = log_model_to_mlflow(
-            model, tokenizer, args, eval_results, training_metadata, mlflow_enabled
-        )
-
-        # Combine training and evaluation results
-        all_results = {**eval_results, **training_result.metrics}
+        model_uri = log_model_to_mlflow(model, tokenizer)
 
         # Save comprehensive results
         final_results = {
@@ -509,41 +420,35 @@ def main():
             "completion_timestamp": datetime.utcnow().isoformat(),
         }
 
-        # Log additional artifacts to MLflow
-        if mlflow_enabled:
-            try:
-                # Log label mappings as artifact
-                mlflow.log_artifact(label_map_path, "model_artifacts")
+        try:
+            training_summary = {
+                "model_performance": {
+                    "accuracy": float(eval_results.get("eval_accuracy", 0)),
+                    "f1_score": float(eval_results.get("eval_f1", 0)),
+                    "precision": float(eval_results.get("eval_precision", 0)),
+                    "recall": float(eval_results.get("eval_recall", 0)),
+                },
+                "training_info": training_metadata,
+                "hyperparameters": final_results["hyperparameters"],
+                "git_info": {
+                    "actor": args.github_actor,
+                    "repository": args.github_repo,
+                    "sha": args.github_sha,
+                    "ref": args.github_ref,
+                },
+            }
 
-                # Create and log training summary
-                training_summary = {
-                    "model_performance": {
-                        "accuracy": float(eval_results.get("eval_accuracy", 0)),
-                        "f1_score": float(eval_results.get("eval_f1", 0)),
-                        "precision": float(eval_results.get("eval_precision", 0)),
-                        "recall": float(eval_results.get("eval_recall", 0)),
-                    },
-                    "training_info": training_metadata,
-                    "hyperparameters": final_results["hyperparameters"],
-                    "git_info": {
-                        "actor": args.github_actor,
-                        "repository": args.github_repo,
-                        "sha": args.github_sha,
-                        "ref": args.github_ref,
-                    },
-                }
+            # Save training summary locally and log to MLflow
+            summary_path = os.path.join(args.model_dir, "training_summary.json")
+            with open(summary_path, "w") as f:
+                json.dump(training_summary, f, indent=2, default=str)
 
-                # Save training summary locally and log to MLflow
-                summary_path = os.path.join(args.model_dir, "training_summary.json")
-                with open(summary_path, "w") as f:
-                    json.dump(training_summary, f, indent=2, default=str)
+            mlflow.log_artifact(summary_path, "training_info")
 
-                mlflow.log_artifact(summary_path, "training_info")
+            print("✅ Additional artifacts logged to MLflow")
 
-                print("✅ Additional artifacts logged to MLflow")
-
-            except Exception as e:
-                print(f"⚠️ Warning: Failed to log additional artifacts to MLflow: {e}")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to log additional artifacts to MLflow: {e}")
 
         # Save final results
         results_path = os.path.join(args.model_dir, "training_results.json")
@@ -554,40 +459,21 @@ def main():
         print("🎉 Training completed successfully with MLflow tracking!")
 
         # Log final success status to MLflow
-        if mlflow_enabled:
-            try:
-                mlflow.log_metric("training_success", 1)
-                mlflow.set_tag("status", "completed")
-            except Exception as e:
-                print(f"⚠️ Warning: Failed to log final status to MLflow: {e}")
+        try:
+            mlflow.log_metric("training_success", 1)
+            mlflow.set_tag("status", "completed")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to log final status to MLflow: {e}")
 
     except Exception as e:
         print(f"❌ Error during training: {str(e)}")
 
-        # Log error to MLflow
-        if mlflow_enabled:
-            try:
-                mlflow.log_metric("training_success", 0)
-                mlflow.set_tag("status", "failed")
-                mlflow.set_tag("error", str(e))
-            except Exception as mlflow_error:
-                print(f"⚠️ Warning: Failed to log error to MLflow: {mlflow_error}")
-
-        # Save error information
-        os.makedirs(args.model_dir, exist_ok=True)
-        error_info = {
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
-            "mlflow_run_id": run_id,
-            "github_context": {
-                "actor": args.github_actor,
-                "repository": args.github_repo,
-                "sha": args.github_sha,
-            },
-        }
-
-        with open(os.path.join(args.model_dir, "error.json"), "w") as f:
-            json.dump(error_info, f, indent=2)
+        try:
+            mlflow.log_metric("training_success", 0)
+            mlflow.set_tag("status", "failed")
+            mlflow.set_tag("error", str(e))
+        except Exception as mlflow_error:
+            print(f"⚠️ Warning: Failed to log error to MLflow: {mlflow_error}")
 
         raise
 

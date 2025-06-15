@@ -21,7 +21,6 @@ def get_job_name():
 
 
 def main():
-    # Get environment variables
     image_uri = os.environ["IMAGE_URI"]
     sagemaker_role = os.environ["SAGEMAKER_ROLE"]
     # s3_bucket = os.environ["S3_BUCKET"]
@@ -30,21 +29,6 @@ def main():
     epochs = float(os.environ.get("EPOCHS", "0.00001"))
     use_spot = os.environ.get("USE_SPOT", "true").lower() == "true"
 
-    # GitHub context
-    github_actor = os.environ.get("GITHUB_ACTOR", "unknown")
-    github_repo = os.environ.get("GITHUB_REPOSITORY", "unknown")
-    github_sha = os.environ.get("GITHUB_SHA", "unknown")
-
-    print(f"🚀 Launching SageMaker training job")
-    print(f"   Image: {image_uri}")
-    print(f"   Instance: {instance_type}")
-    print(f"   Epochs: {epochs}")
-    print(f"   Spot instances: {use_spot}")
-    print(f"   Triggered by: {github_actor}")
-    print(f"   Repository: {github_repo}")
-    print(f"   Commit: {github_sha}")
-
-    # Initialize SageMaker session
     sagemaker_session = sagemaker.Session(
         boto3.session.Session(region_name="us-east-1")
     )
@@ -58,8 +42,8 @@ def main():
         "model-name": "bert-base-uncased",
         "max-length": 256,
         "num-train-epochs": epochs,
-        "per-device-train-batch-size": 16 if "p3" in instance_type else 2,
-        "per-device-eval-batch-size": 16 if "p3" in instance_type else 2,
+        "per-device-train-batch-size": 2,
+        "per-device-eval-batch-size": 2,
         "learning-rate": 2e-5,
         "weight-decay": 0.01,
         "warmup-steps": 100,
@@ -69,9 +53,6 @@ def main():
     tags = [
         {"Key": "Project", "Value": "bert-genre-classifier"},
         {"Key": "Environment", "Value": "cicd"},
-        {"Key": "GitHubRepo", "Value": github_repo},
-        {"Key": "GitHubActor", "Value": github_actor},
-        {"Key": "GitHubSHA", "Value": github_sha},
         {"Key": "CreatedBy", "Value": "github-actions"},
     ]
 
@@ -94,7 +75,7 @@ def main():
         estimator_kwargs.update(
             {
                 "use_spot_instances": True,
-                "max_wait": 3600 * 8,  # Max wait time for spot instances
+                "max_wait": 3600 * 8,
             }
         )
 
@@ -106,7 +87,6 @@ def main():
     print(f"🎯 Starting training job: {job_name}")
 
     try:
-        # Start training job
         estimator.fit(
             inputs={"training": input_path},
             job_name=job_name,
@@ -131,12 +111,6 @@ def main():
             "input_path": input_path,
             "output_path": output_path,
             "use_spot_instances": use_spot,
-            "github_context": {
-                "actor": github_actor,
-                "repository": github_repo,
-                "sha": github_sha,
-                "ref": os.environ.get("GITHUB_REF", "unknown"),
-            },
             "started_at": datetime.utcnow().isoformat(),
         }
 
@@ -179,11 +153,6 @@ def main():
             "error": str(e),
             "job_name": job_name,
             "timestamp": datetime.utcnow().isoformat(),
-            "github_context": {
-                "actor": github_actor,
-                "repository": github_repo,
-                "sha": github_sha,
-            },
         }
 
         with open("training_results/error.json", "w") as f:
