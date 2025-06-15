@@ -8,7 +8,6 @@ on:
         required: true
         default: 'staging'
 
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -42,18 +41,26 @@ jobs:
                 SubnetId=${{ secrets.SUBNET_ID }} \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Retrieve EC2 Instance ID
-        id: get_instance_id
+      - name: Retrieve EC2 Instance Info
+        id: get_instance_info
         run: |
           INSTANCE_ID=$(aws cloudformation describe-stacks \
             --stack-name $STACK_NAME \
             --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
             --output text)
+          
+          # Wait for instance to be running
+          echo "Waiting for instance to be in running state..."
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          
           PUBLIC_IP=$(aws ec2 describe-instances \
             --instance-ids $INSTANCE_ID \
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
+          
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
           echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+          echo "::set-output name=instance_id::$INSTANCE_ID"
           echo "::set-output name=public_ip::$PUBLIC_IP"
 
       - name: Set up SSH key
@@ -62,15 +69,29 @@ jobs:
         run: |
           echo "$SSH_PRIVATE_KEY" > ssh_key
           chmod 600 ssh_key
-          echo ${{ env.PUBLIC_IP }}
+          echo "Instance ID: ${{ env.INSTANCE_ID }}"
+          echo "Public IP: ${{ env.PUBLIC_IP }}"
+
+      - name: Wait for SSH to be ready
+        run: |
+          echo "Waiting for SSH to be ready..."
+          timeout 300 bash -c '
+            until ssh -i ssh_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@${{ env.PUBLIC_IP }} "echo SSH is ready"; do
+              echo "Waiting for SSH..."
+              sleep 10
+            done
+          '
     
-      - name: Install Docker via SSH
+      - name: Install Docker and verify CloudWatch Agent
         env:
           HOST: ${{ env.PUBLIC_IP }}
           USERNAME: ubuntu
         run: |
           ssh -i ssh_key -o StrictHostKeyChecking=no $USERNAME@$HOST '
+            # Update system
             sudo apt-get update &&
+            
+            # Install Docker
             sudo apt-get install -y ca-certificates curl &&
             sudo install -m 0755 -d /etc/apt/keyrings &&
             sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc &&
@@ -80,5 +101,66 @@ jobs:
               $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
               sudo tee /etc/apt/sources.list.d/docker.list > /dev/null &&
             sudo apt-get update &&
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
-            ' 
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin &&
+            
+            # Add ubuntu user to docker group
+            sudo usermod -aG docker ubuntu &&
+            
+            # Verify CloudWatch agent is running
+            echo "Checking CloudWatch agent status..." &&
+            sudo systemctl status amazon-cloudwatch-agent --no-pager || echo "CloudWatch agent not running via systemd, checking alternative..." &&
+            
+            # Alternative check for CloudWatch agent process
+            if pgrep -f amazon-cloudwatch-agent > /dev/null; then
+              echo "CloudWatch agent is running"
+            else
+              echo "CloudWatch agent is not running, attempting to start..."
+              # Try to start it manually if needed
+              sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+                -a fetch-config \
+                -m ec2 \
+                -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+                -s
+            fi &&
+            
+            # Install AWS CLI v2 for better integration
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" &&
+            sudo apt-get install -y unzip &&
+            unzip awscliv2.zip &&
+            sudo ./aws/install
+          '
+
+      - name: Verify metrics are being collected
+        run: |
+          echo "Waiting 2 minutes for initial metrics to be collected..."
+          sleep 120
+          
+          # Check if metrics are being published to CloudWatch
+          aws cloudwatch get-metric-data \
+            --metric-data-queries '[{
+              "Id": "m1",
+              "MetricStat": {
+                "Metric": {
+                  "Namespace": "CWAgent",
+                  "MetricName": "mem_used_percent",
+                  "Dimensions": [{"Name": "InstanceId", "Value": "${{ env.INSTANCE_ID }}"}]
+                },
+                "Period": 300,
+                "Stat": "Average"
+              },
+              "ReturnData": true
+            }]' \
+            --start-time $(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%S) \
+            --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+            --query 'MetricDataResults[0].Values' \
+            --output text || echo "No memory metrics found yet (this is normal for new instances)"
+
+      - name: Output instance details for smoke test
+        run: |
+          echo "=== Instance Details for Smoke Test ==="
+          echo "Instance ID: ${{ env.INSTANCE_ID }}"
+          echo "Public IP: ${{ env.PUBLIC_IP }}"
+          echo ""
+          echo "Environment variables to set for smoke test:"
+          echo "export EC2_INSTANCE_ID=${{ env.INSTANCE_ID }}"
+          echo "export PUBLIC_IP=${{ env.PUBLIC_IP }}"
