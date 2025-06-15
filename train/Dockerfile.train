@@ -1,28 +1,21 @@
 FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-runtime
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=TRUE
 ENV PYTHONDONTWRITEBYTECODE=TRUE
 ENV PATH="/opt/program:${PATH}"
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Set up the program directory
 COPY train/requirements.txt /opt/program/requirements.txt
 
-# Install Python dependencies
 RUN pip install --no-cache-dir -r /opt/program/requirements.txt
 
-# Copy the training script
 COPY train/train.py /opt/program/train.py
 
-# Make the training script executable
 RUN chmod +x /opt/program/train.py
 
-# Set the working directory
 WORKDIR /opt/program
