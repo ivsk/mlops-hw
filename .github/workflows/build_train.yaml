@@ -1,0 +1,88 @@
+name: Build Docker Images
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile*'
+      - 'requirements.txt'
+      - 'train.py'
+      - 'inference.py'
+      - 'train'
+      - 'serve'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  TRAINING_ECR_REPOSITORY: bert/training
+  INFERENCE_ECR_REPOSITORY: bert/inference
+
+jobs:
+  build-training-image:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.build_training != 'false' }}
+    outputs:
+      training_image_uri: ${{ steps.build-training.outputs.image_uri }}
+      training_image_tag: ${{ steps.get-tag.outputs.tag }}
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Get image tag
+      id: get-tag
+      run: |
+        if [ "${{ github.event_name }}" == "pull_request" ]; then
+          TAG="pr-${{ github.event.number }}-$(git rev-parse --short HEAD)"
+        else
+          TAG="$(git rev-parse --short HEAD)"
+        fi
+        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        echo "Using tag: $TAG"
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Check if training image exists
+      id: check-training-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        if aws ecr describe-images --repository-name ${{ env.TRAINING_ECR_REPOSITORY }} --image-ids imageTag=$IMAGE_TAG 2>/dev/null; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Training image with tag $IMAGE_TAG already exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Training image with tag $IMAGE_TAG does not exist"
+        fi
+        
+    - name: Build and push training image
+      id: build-training
+      if: ${{ steps.check-training-image.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true' }}
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ steps.get-tag.outputs.tag }}
+      run: |
+        # Create ECR repository if it doesn't exist
+        aws ecr describe-repositories --repository-names ${{ env.TRAINING_ECR_REPOSITORY }}       
+        # Build training image
+        echo "🔨 Building training image..."
+        docker build -f train/Dockerfile.train -t $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG .
+        
+        # Push to ECR
+        echo "📤 Pushing training image..."
+        docker push $ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG
+        
+        IMAGE_URI="$ECR_REGISTRY/$TRAINING_ECR_REPOSITORY:$IMAGE_TAG"
+        echo "image_uri=$IMAGE_URI" >> $GITHUB_OUTPUT
+        echo "✅ Training image built and pushed: $IMAGE_URI"
+        
