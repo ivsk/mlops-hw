@@ -62,9 +62,8 @@ Resources:
       VpcId: !Ref VpcId
       SecurityGroupEgress:
         – IpProtocol: -1
-          CidrIp: 0.0.0.0/0    # outbound to Internet (for SSM, CloudWatch via NAT)
+          CidrIp: 0.0.0.0/0
       SecurityGroupIngress:
-        # SSH: only if a KeyName is provided, and locked to your management CIDR
         - !If
           - UseKeyPair
           - IpProtocol: tcp
@@ -72,8 +71,6 @@ Resources:
             ToPort: 22
             CidrIp: 0.0.0.0/0
           - !Ref AWS::NoValue
-
-        # App HTTPS on port 8000: open to the Internet (or scope further if needed)
         - IpProtocol: tcp
           FromPort: 8000
           ToPort: 8000
