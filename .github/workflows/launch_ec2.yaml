@@ -36,7 +36,7 @@ jobs:
             --stack-name $STACK_NAME \
             --parameter-overrides \
                 InstanceType=t2.large \
-                KeyName=infratest \
+                KeyName=${{ secrets.EC2_PEM_KEY_NAME }} \
                 VpcId=${{ secrets.VPC_ID }} \
                 SubnetId=${{ secrets.SUBNET_ID }} \
             --capabilities CAPABILITY_NAMED_IAM
