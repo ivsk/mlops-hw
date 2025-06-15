@@ -12,17 +12,17 @@ logger = logging.getLogger("comprehensive_smoke_test")
 
 # Get configuration from environment variables
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_SERVER_ARN")
-PUBLIC_IP = os.environ.get("PUBLIC_IP")
+PUBLIC_IP_STAGING = os.environ.get("PUBLIC_IP_STAGING")
 EC2_INSTANCE_ID = os.environ.get("EC2_INSTANCE_ID")
 MODEL_NAME = os.environ.get("MODEL_NAME")
 
-if not all([MLFLOW_TRACKING_URI, PUBLIC_IP, EC2_INSTANCE_ID]):
+if not all([MLFLOW_TRACKING_URI, PUBLIC_IP_STAGING, EC2_INSTANCE_ID]):
     raise ValueError(
-        "Missing one or more required environment variables: MLFLOW_TRACKING_SERVER_ARN, PUBLIC_IP, EC2_INSTANCE_ID"
+        "Missing one or more required environment variables: MLFLOW_TRACKING_SERVER_ARN, PUBLIC_IP_STAGING, EC2_INSTANCE_ID"
     )
 
 # --- Test Parameters ---
-TARGET_URL = f"http://{PUBLIC_IP}:8000/predict"
+TARGET_URL = f"http://{PUBLIC_IP_STAGING}:8000/predict"
 TEST_PAYLOAD = {
     "data": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla et nibh vel neque bibendum ultricies. Nunc pharetra et felis non semper."
 }
