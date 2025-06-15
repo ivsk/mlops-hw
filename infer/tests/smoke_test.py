@@ -128,9 +128,9 @@ def run_smoke_test():
     model_run_id = latest_model_version.run_id
 
     # --- Log Parameters for reproducibility ---
-    mlflow.log_params("target_url", TARGET_URL, run_id=model_run_id)
-    mlflow.log_params("ec2_instance_id", EC2_INSTANCE_ID, run_id=model_run_id)
-    mlflow.log_params("num_requests", NUM_REQUESTS, run_id=model_run_id)
+    mlflow.log_params({"target_url": TARGET_URL}, run_id=model_run_id)
+    mlflow.log_params({"ec2_instance_id": EC2_INSTANCE_ID}, run_id=model_run_id)
+    mlflow.log_params({"num_requests": NUM_REQUESTS}, run_id=model_run_id)
 
     successful_requests = 0
     failed_requests = 0
@@ -145,7 +145,7 @@ def run_smoke_test():
 
             latency = (end_time - start_time) * 1000  # in milliseconds
             latencies.append(latency)
-            mlflow.log_metrics(
+            mlflow.log_metric(
                 "request_latency_ms", latency, step=i, run_id=model_run_id
             )
 
@@ -168,25 +168,25 @@ def run_smoke_test():
 
     # --- Log Summary Metrics ---
     if latencies:
-        mlflow.log_metrics(
+        mlflow.log_metric(
             "avg_latency_ms", sum(latencies) / len(latencies), run_id=model_run_id
         )
-        mlflow.log_metrics(
+        mlflow.log_metric(
             "p95_latency_ms",
             sorted(latencies)[int(len(latencies) * 0.95)],
             run_id=model_run_id,
         )
-        mlflow.log_metrics("max_latency_ms", max(latencies), run_id=model_run_id)
+        mlflow.log_metric("max_latency_ms", max(latencies), run_id=model_run_id)
 
     success_rate = (successful_requests / NUM_REQUESTS) * 100
-    mlflow.log_metrics("success_rate_percent", success_rate, run_id=model_run_id)
+    mlflow.log_metric("success_rate_percent", success_rate, run_id=model_run_id)
     logger.info(f"Test Summary: Success Rate = {success_rate:.2f}%")
 
     # --- Resource Utilization Test ---
     # Fetch metrics *after* the load test to see the impact
     resource_metrics = get_ec2_metrics(EC2_INSTANCE_ID)
     if resource_metrics["avg_cpu_utilization"] is not None:
-        mlflow.log_metrics(
+        mlflow.log_metric(
             "avg_cpu_utilization",
             resource_metrics["avg_cpu_utilization"],
             run_id=model_run_id,
@@ -196,7 +196,7 @@ def run_smoke_test():
         )
 
     if resource_metrics["avg_memory_utilization"] is not None:
-        mlflow.log_metrics(
+        mlflow.log_metric(
             "avg_memory_utilization",
             resource_metrics["avg_memory_utilization"],
             run_id=model_run_id,
