@@ -76,6 +76,8 @@ jobs:
       - name: Perform smoke testing
         env:
             HOST: ${{ env.PUBLIC_IP_STAGING }}
+            MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
+            EC2_INSTANCE_ID: $INSTANCE_ID_STAGING
             USERNAME: ubuntu
         run: |
           python infer/tests/smoke_test.py
@@ -88,7 +90,8 @@ jobs:
         run: |
           echo "Cleaning up the smoke test container on staging..."
           ssh -i ssh_key -o StrictHostKeyChecking=no $USERNAME@$HOST '
-          sudo docker stop bert_smoketest || true
+            sudo docker stop bert_smoketest || true
+            '
       
       - name: Alias model to become champion
         env:
