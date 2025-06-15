@@ -34,13 +34,9 @@ def setup_mlflow():
     """Sets the MLflow tracking URI and experiment."""
     try:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        client = mlflow.MlflowClient()
-        latest_model_version = client.get_latest_versions(MODEL_NAME)[0]
-
     except Exception as e:
         logger.error(f"Error setting up MLflow: {e}")
         raise
-    return latest_model_version
 
 
 def get_ec2_metrics(instance_id: str):
@@ -124,7 +120,10 @@ def run_smoke_test():
     Runs the main smoke test logic, including performance and resource checks,
     and logs the results to MLflow.
     """
-    latest_model_version = setup_mlflow()
+    setup_mlflow()
+    client = mlflow.MlflowClient() 
+    latest_model_version = client.get_latest_versions(MODEL_NAME)[0]
+
     model_run_id = latest_model_version.run_id
 
     # --- Log Parameters for reproducibility ---
@@ -207,10 +206,10 @@ def run_smoke_test():
 
     # --- Set Final Test Status Tag ---
     if success_rate > 95:
-        mlflow.set_registered_model_tag(MODEL_NAME, "smoke_test_status", "PASSED")
+        client.set_registered_model_tag(MODEL_NAME, "smoke_test_status", "PASSED")
         logger.info("Smoke test PASSED")
     else:
-        mlflow.set_tag(MODEL_NAME, "smoke_test_status", "FAILED")
+        client.set_registered_model_tag(MODEL_NAME, "smoke_test_status", "FAILED")
         logger.error("Smoke test FAILED")
         # Optionally, raise an exception to fail a CI/CD pipeline
         # raise Exception("Smoke test failed with success rate below 95%")
