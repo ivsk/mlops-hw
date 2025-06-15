@@ -25,7 +25,7 @@ if not all([MLFLOW_TRACKING_URI, PUBLIC_IP, EC2_INSTANCE_ID]):
 
 # --- Test Parameters ---
 TARGET_URL = f"http://{PUBLIC_IP}:8000/predict"
-TEST_PAYLOAD = {"data": "What is love, baby don't hurt me, don't hurt me, no more."}
+TEST_PAYLOAD = {"data": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla et nibh vel neque bibendum ultricies. Nunc pharetra et felis non semper."}
 NUM_REQUESTS = 20  # Number of requests to send to simulate a small load
 REQUEST_TIMEOUT = 15  # Seconds
 
