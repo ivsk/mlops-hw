@@ -1,6 +1,4 @@
 import mlflow
-import sagemaker
-import boto3
 import os
 import logging
 import argparse
@@ -23,8 +21,7 @@ def set_model_alias(model_name: str, alias: str) -> None:
     latest_model_version = client.get_latest_versions(model_name)[0]
     client.set_registered_model_alias(model_name, alias, latest_model_version.version)
 
-    logger.info(f"Artifacts downloaded with run ID: {latest_model_version.run_id}")
-    logger.info(f"Contents of current directory: {os.listdir()}")
+    logger.info(f"Alias {alias} set to model: {model_name}")
 
 
 def main():
