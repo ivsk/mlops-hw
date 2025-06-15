@@ -1,14 +1,19 @@
 name: Deploy EC2 Instance
 
 on:
-  #push:
-  #  branches:
-  #    - main
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Which environment to deploy (staging or prod)'
+        required: true
+        default: 'staging'
+
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      STACK_NAME: ec2-deployment-stack-${{ github.event.inputs.environment }}
 
     steps:
       - name: Checkout repository
@@ -27,7 +32,6 @@ jobs:
 
       - name: Deploy CloudFormation Stack
         run: |
-          STACK_NAME=ec2-deployment-stack
           aws cloudformation deploy \
             --template-file cloudformation/ec2-instance.yaml \
             --stack-name $STACK_NAME \
@@ -38,15 +42,11 @@ jobs:
                 SubnetId=${{ secrets.SUBNET_ID }} \
             --capabilities CAPABILITY_NAMED_IAM
 
-      - name: Output Stack Info
-        run: |
-          aws cloudformation describe-stacks --stack-name ec2-deployment-stack
-
       - name: Retrieve EC2 Instance ID
         id: get_instance_id
         run: |
           INSTANCE_ID=$(aws cloudformation describe-stacks \
-            --stack-name ec2-deployment-stack \
+            --stack-name $STACK_NAME \
             --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
             --output text)
           PUBLIC_IP=$(aws ec2 describe-instances \
@@ -54,7 +54,6 @@ jobs:
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
           echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
           echo "::set-output name=public_ip::$PUBLIC_IP"
 
       - name: Set up SSH key
@@ -81,5 +80,5 @@ jobs:
               $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
               sudo tee /etc/apt/sources.list.d/docker.list > /dev/null &&
             sudo apt-get update &&
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
             ' 
