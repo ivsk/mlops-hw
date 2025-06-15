@@ -61,7 +61,7 @@ jobs:
             sudo snap install aws-cli --classic
             sudo aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 212383650267.dkr.ecr.us-east-1.amazonaws.com
             sudo docker pull 212383650267.dkr.ecr.us-east-1.amazonaws.com/bert/inference:dca789c
-            sudo docker run -d -p 8000:8000 212383650267.dkr.ecr.us-east-1.amazonaws.com/bert/inference:dca789c
+            sudo docker run -d --rm --name bert_smoketest -p 8000:8000 212383650267.dkr.ecr.us-east-1.amazonaws.com/bert/inference:dca789c
             ' 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -79,6 +79,16 @@ jobs:
             USERNAME: ubuntu
         run: |
           python infer/tests/smoke_test.py
+      
+      - name: Clean up Staging Container
+        if: always()
+        env:
+          HOST: ${{ env.PUBLIC_IP_STAGING }}
+          USERNAME: ubuntu
+        run: |
+          echo "Cleaning up the smoke test container on staging..."
+          ssh -i ssh_key -o StrictHostKeyChecking=no $USERNAME@$HOST '
+          sudo docker stop bert_smoketest || true
       
       - name: Alias model to become champion
         env:
