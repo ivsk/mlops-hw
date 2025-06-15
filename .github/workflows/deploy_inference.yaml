@@ -78,6 +78,7 @@ jobs:
             HOST: ${{ env.PUBLIC_IP_STAGING }}
             MLFLOW_TRACKING_SERVER_ARN: ${{ secrets.MLFLOW_TRACKING_SERVER_ARN }}
             EC2_INSTANCE_ID: $INSTANCE_ID_STAGING
+            MODEL_NAME: "bert-genre-classifier"
             USERNAME: ubuntu
         run: |
           python infer/tests/smoke_test.py
