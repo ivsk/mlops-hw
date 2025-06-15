@@ -35,7 +35,6 @@ Resources:
             Action: ['sts:AssumeRole']
       Path: "/"
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
         - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
         
   InstanceSecurityGroup:
