@@ -70,7 +70,7 @@ jobs:
         id: check_s3
         run: python .github/scripts/check_s3_for_new_data.py
 
-  build-and-train:
+  train:
     runs-on: ubuntu-latest
     # This job depends on the check and only runs if new data is found or if it's a manual trigger
     needs: check-for-new-data
