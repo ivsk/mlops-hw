@@ -9,7 +9,7 @@ This pipeline implements an end-to-end machine learning operations (MLOps) solut
 - **Automated Training**: SageMaker-based distributed training with hyperparameter optimization
 - **Model Versioning**: MLflow integration for experiment tracking and model registry
 - **CI/CD Pipeline**: GitHub Actions workflows for automated building, training, and deployment
-- **Infrastructure as Code**: CloudFormation templates for reproducible infrastructure
+- **Infrastructure as Code**: CloudFormation templates for inference
 - **Production Deployment**: EC2-based LitServe inference API
 - **Quality Assurance**: Automated smoke testing and model validation
 
@@ -55,6 +55,7 @@ This pipeline implements an end-to-end machine learning operations (MLOps) solut
    ```bash
    # Trigger the "SageMaker Training Pipeline" workflow
    # Or push changes to train/ directory
+   # Upload new training data to S3
    ```
 
 5. **Deploy Model**
@@ -110,13 +111,15 @@ This pipeline implements an end-to-end machine learning operations (MLOps) solut
 
 ### 4. Deployment Workflows
 
-**Training Workflow** (`.github/workflows/sagemaker-training.yml`):
+**Training Workflow** (`.github/workflows/launch_training.yml`):
 ```yaml
 Inputs:
 - instance_type: SageMaker instance type
 - epochs: Number of training epochs
 - use_spot: Use spot instances for cost savings
 ```
+- model training can either be triggered manually
+- otherwise it monitors an S3 bucket daily for new training data
 
 ### Deployment Workflow (`.github/workflows/deploy-inference.yml`):
 1. Deploy to staging
@@ -265,6 +268,34 @@ sudo systemctl status amazon-cloudwatch-agent
 aws sagemaker describe-training-job --training-job-name <job-name>
 ```
 
+## ⚠️ Current Limitations
+
+This section outlines the current limitations of the MLOps pipeline
+
+### 1. **No Manual Approval Gates**
+- **Impact**: Models are automatically promoted without human review
+- **Risk**: Potentially problematic models could reach production without oversight
+
+### 2. **Public Endpoints Only**
+- **Impact**: Inference API is exposed to the public internet without authentication
+- **Security Risk**: 
+  - No rate limiting
+  - No authentication/authorization
+
+### 3. **No High Availability or Load Balancing**
+- **Impact**: Single point of failure for inference service
+- **Current Architecture**:
+  - One EC2 instance per environment (staging/prod)
+  - No automatic failover
+  - No load distribution
+  - Manual scaling only
+- **Risks**:
+  - Service unavailable if instance fails
+  - Cannot handle traffic spikes
+  - No zero-downtime deployments
+  - Potential for data loss during failures
+
+
 ### Common Issues
 
 1. **Training Job Fails**
@@ -308,20 +339,3 @@ aws sagemaker describe-training-job --training-job-name <job-name>
    - Check file permissions in container
    - Validate label_mappings.json format
    - Ensure sufficient memory for model loading
-
-## 🔒 Security Best Practices
-
-1. **Secrets Management**
-   - Use GitHub Secrets for sensitive data
-   - Rotate AWS credentials regularly
-   - Use IAM roles where possible
-
-2. **Network Security**
-   - EC2 instances in private subnet (recommended)
-   - Security groups with minimal access
-   - Use VPC endpoints for AWS services
-
-3. **Model Security**
-   - Encrypt model artifacts at rest
-   - Use HTTPS for API endpoints
-   - Implement API authentication (future)
